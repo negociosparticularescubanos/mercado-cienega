@@ -1002,7 +1002,6 @@ function pintarUser(){
 </div>
 <script>
 var CF_LEADS_API = 'https://script.google.com/macros/s/AKfycbwkAfve3VYodZD-ogCvBKRvWwTm5umCtYnW1RjnSDWEzCHVwVFQ_Jufl9fhdqjS3RbB/exec';
-var CF_WA = '5353704722';
 var cfEstado = 'inicio', cfDatos = { interes: '', detalle: '', nombre: '', telefono: '' }, cfAbiertoUnaVez = false;
 function cfNorm(s) { return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
 function cfMsgs() { return document.getElementById('cfMsgs'); }
@@ -1040,15 +1039,14 @@ function cfMenu() {
   cfEstado = 'menu';
   cfResponder('¿En qué te ayudo hoy?', [
     { t: '🛒 Buscar productos', v: 'ofertas' }, { t: '🏷️ Quiero vender aquí', v: 'vender' },
-    { t: '🏠 Casa Frank', v: 'casa' }, { t: '👥 Equipo del Mercado', v: 'equipo' },
-    { t: '📍 ¿Dónde están?', v: 'donde' }]);
+    { t: '👥 Equipo del Mercado', v: 'equipo' }, { t: '📍 ¿Dónde están?', v: 'donde' }]);
 }
 function cfAbrir() {
   document.getElementById('cfPanel').classList.add('abierto');
   document.getElementById('cfBurbuja').style.display = 'none';
   if (!cfAbiertoUnaVez) {
     cfAbiertoUnaVez = true;
-    cfResponder('¡Hola! 👋 Soy el asistente del Mercado Ciénega de Zapata: aquí la gente de la Ciénaga vende sus productos y servicios. Te ayudo a encontrar lo que buscas, a publicar tu anuncio o con los servicios de Casa Frank.');
+    cfResponder('¡Hola! 👋 Soy el asistente del Mercado Ciénega de Zapata: aquí la gente de la Ciénaga vende sus productos y servicios. Te ayudo a encontrar lo que buscas y a publicar tu anuncio.');
     setTimeout(cfMenu, 500);
   }
 }
@@ -1061,8 +1059,6 @@ function cfTap(ch) {
   cfRuta(ch.v, true);
 }
 var CF_TEMAS = {
-  aloj: { interes: 'Alojamiento', pregunta: '¡Claro! 🏠 Casa Frank tiene alojamiento en el Entronque de Playa Larga. ¿Para qué fechas piensas venir y cuántas personas serían?' },
-  rest: { interes: 'Restaurante', pregunta: '¡Con gusto! 🍽️ El bar-restaurante de Casa Frank te espera con comida y bebidas, en mesa o para llevar. ¿Para cuándo sería y cuántas personas son?' },
   equipo: { interes: 'Equipo del Mercado', pregunta: 'Perfecto, te conecto con el equipo del Mercado. Cuéntame en una línea qué necesitas.' }
 };
 function cfTema(v) {
@@ -1070,11 +1066,6 @@ function cfTema(v) {
   cfDatos.interes = tema.interes; cfDatos.detalle = '';
   cfEstado = 'detalle';
   cfResponder(tema.pregunta, [{ t: '↩️ Volver al menú', v: 'menu' }]);
-}
-function cfCasa() {
-  cfEstado = 'menu';
-  cfResponder('🏠 Casa Frank está en el Entronque de Playa Larga y ofrece alojamiento y bar-restaurante. ¿Qué te interesa?', [
-    { t: '🏠 Alojamiento', v: 'aloj' }, { t: '🍽️ Restaurante', v: 'rest' }, { t: '↩️ Menú', v: 'menu' }]);
 }
 function cfVender() {
   cfEstado = 'menu';
@@ -1117,13 +1108,6 @@ function cfGuardarLead() {
   var hecho = function () {
     cfResponder('¡Listo, ' + cfDatos.nombre.split(' ')[0] + '! ✅ Ya tomé tus datos y te contactan enseguida por WhatsApp.\n¿Deseas algo más?', [
       { t: '🛒 Buscar productos', v: 'ofertas' }, { t: '🏷️ Quiero vender aquí', v: 'vender' }, { t: '↩️ Menú', v: 'menu' }]);
-    if (CF_WA && (cfDatos.interes === 'Alojamiento' || cfDatos.interes === 'Restaurante')) {
-      var txt = 'Hola Casa Frank, soy ' + cfDatos.nombre + '. Me interesa: ' + cfDatos.interes + (cfDatos.detalle ? ' — ' + cfDatos.detalle : '');
-      var d = document.createElement('div');
-      d.className = 'cf-m cf-bot';
-      d.innerHTML = 'Si prefieres, escríbenos tú directamente:<br><a class="cf-wa" target="_blank" href="https://wa.me/' + CF_WA + '?text=' + encodeURIComponent(txt) + '">💬 Abrir WhatsApp</a>';
-      cfMsgs().appendChild(d); cfScroll();
-    }
   };
   if (!CF_LEADS_API) { hecho(); return; }
   fetch(CF_LEADS_API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(cuerpo) })
@@ -1133,16 +1117,7 @@ function cfGuardarLead() {
 }
 function cfFalloLead() {
   cfEstado = 'fin';
-  if (CF_WA && (cfDatos.interes === 'Alojamiento' || cfDatos.interes === 'Restaurante')) {
-    var txt = 'Hola Casa Frank, soy ' + cfDatos.nombre + '. Me interesa: ' + cfDatos.interes + (cfDatos.detalle ? ' — ' + cfDatos.detalle : '') + '. Mi teléfono: ' + cfDatos.telefono;
-    var d = document.createElement('div');
-    d.className = 'cf-m cf-bot';
-    d.innerHTML = 'No pude guardar tus datos automáticamente. Toca aquí y se envían por WhatsApp al momento:<br><a class="cf-wa" target="_blank" href="https://wa.me/' + CF_WA + '?text=' + encodeURIComponent(txt) + '">💬 Enviar por WhatsApp</a>';
-    cfMsgs().appendChild(d); cfScroll();
-    cfChips([{ t: '↩️ Volver al menú', v: 'menu' }]);
-  } else {
-    cfResponder('Uy, no pude guardar tus datos en este momento. Inténtalo de nuevo en un ratico, por favor.', [{ t: '↩️ Volver al menú', v: 'menu' }]);
-  }
+  cfResponder('Uy, no pude guardar tus datos en este momento. Inténtalo de nuevo en un ratico, por favor.', [{ t: '↩️ Volver al menú', v: 'menu' }]);
 }
 function cfBuscar(termino) {
   cfEstado = 'buscando';
@@ -1193,13 +1168,12 @@ function cfRuta(v, esBoton) {
   var n = cfNorm(v);
   if (esBoton) {
     if (v === 'menu') return cfMenu();
-    if (v === 'aloj' || v === 'rest' || v === 'equipo') return cfTema(v);
-    if (v === 'casa') return cfCasa();
+    if (v === 'equipo') return cfTema(v);
     if (v === 'vender') return cfVender();
     if (v === 'publicar') { cfCerrar(); try { abrirPublicar(); } catch (e) {} return; }
     if (v === 'asesor') { cfDatos.interes = 'Quiero vender en el Mercado'; cfDatos.detalle = 'Quiere publicar un anuncio y pidió asesoría'; return cfPedirContacto(); }
     if (v === 'ofertas') { cfEstado = 'buscar_texto'; return cfResponder('🛒 Dime qué andas buscando y lo reviso ahora mismo en los anuncios publicados.', [{ t: '↩️ Menú', v: 'menu' }]); }
-    if (v === 'donde') return cfResponder('📍 El Mercado Ciénega es la plataforma de la Ciénaga de Zapata, Matanzas; los anuncios son de vendedores de la zona y Casa Frank está en el Entronque de Playa Larga. ¿Te ayudo con algo más?', [{ t: '🛒 Buscar productos', v: 'ofertas' }, { t: '🏷️ Quiero vender aquí', v: 'vender' }, { t: '↩️ Menú', v: 'menu' }]);
+    if (v === 'donde') return cfResponder('📍 El Mercado Ciénega es la plataforma de la Ciénaga de Zapata, Matanzas; los anuncios son de vendedores de la zona. ¿Te ayudo con algo más?', [{ t: '🛒 Buscar productos', v: 'ofertas' }, { t: '🏷️ Quiero vender aquí', v: 'vender' }, { t: '↩️ Menú', v: 'menu' }]);
     if (v === 'contacto') return cfPedirContacto();
     if (v === 'confirmar') return cfGuardarLead();
     if (v === 'otros') { cfEstado = 'nombre'; return cfResponder('Dime tu nombre.', []); }
@@ -1226,9 +1200,6 @@ function cfRuta(v, esBoton) {
   }
   if (/\b(menu|inicio|volver|atras)\b/.test(n)) return cfMenu();
   if (/(public|anunci|destac)/.test(n) || /quiero vender/.test(n) || /^vend(er|o)\b/.test(n)) { cfDecir('🏷️ Quiero vender aquí', true); return cfVender(); }
-  if (/(casa frank|frank)/.test(n)) return cfCasa();
-  if (/(aloj|habitac|hosped|dormir|quedarme|casa particular|cuarto)/.test(n)) { cfDecir('🏠 Alojamiento', true); return cfTema('aloj'); }
-  if (/(restaur|comer|almuerz|cenar|mesa|bar\b|comida|bebida)/.test(n)) { cfDecir('🍽️ Restaurante', true); return cfTema('rest'); }
   if (/(donde|ubicac|llegar|direccion|quedan)/.test(n)) return cfRuta('donde', true);
   if (/(horario|abren|abierto|hora)/.test(n)) {
     cfDatos.interes = 'Equipo del Mercado'; cfDatos.detalle = 'Pregunta por el horario';
@@ -1240,10 +1211,11 @@ function cfRuta(v, esBoton) {
   if (/(hola|buenas|saludos)/.test(n)) return cfMenu();
   cfResponder('No te entendí bien. Puedo ayudarte con esto:', [
     { t: '🛒 Buscar productos', v: 'ofertas' }, { t: '🏷️ Quiero vender aquí', v: 'vender' },
-    { t: '🏠 Casa Frank', v: 'casa' }, { t: '👥 Equipo del Mercado', v: 'equipo' }]);
+    { t: '👥 Equipo del Mercado', v: 'equipo' }]);
 }
 </script>
 <!-- ===== fin del asistente ===== -->
+
 
 </body>
 </html>
