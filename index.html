@@ -953,5 +953,297 @@ function pintarUser(){
   try{ const r = await api('tasa_auto', {}); if(r.auto){ await cargarTasa(); } }catch(e){}
 })();
 </script>
+<!-- ===== Asistente del Mercado Ciénega (guiado) ===== -->
+<style>
+#cfBurbuja{position:fixed;right:16px;bottom:86px;z-index:95;width:58px;height:58px;border-radius:50%;border:0;cursor:pointer;background:linear-gradient(140deg,#1e7a4c,#14532d);color:#fff;font-size:27px;box-shadow:0 10px 26px rgba(20,83,45,.45);display:flex;align-items:center;justify-content:center}
+#cfBurbuja::after{content:'';position:absolute;top:2px;right:2px;width:13px;height:13px;border-radius:50%;background:#f59e0b;border:2px solid #fff}
+#cfPanel{position:fixed;right:12px;bottom:12px;z-index:135;width:min(392px,calc(100vw - 24px));height:min(600px,calc(100dvh - 24px));background:#fff;border-radius:20px;box-shadow:0 24px 60px rgba(0,0,0,.35);display:none;flex-direction:column;overflow:hidden;font-family:inherit}
+#cfPanel.abierto{display:flex}
+.cf-cab{background:linear-gradient(120deg,#14532d,#1e7a4c);color:#fff;padding:13px 16px;display:flex;align-items:center;gap:10px}
+.cf-cab .cf-av{width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center;font-size:21px;flex:none}
+.cf-cab b{font-size:1rem;display:block;line-height:1.15}
+.cf-cab small{opacity:.85;font-size:.76rem}
+.cf-cab button{margin-left:auto;background:rgba(255,255,255,.15);border:0;color:#fff;width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer;flex:none}
+#cfMsgs{flex:1;overflow-y:auto;padding:14px 12px;background:#f4f7f4;display:flex;flex-direction:column;gap:8px}
+.cf-m{max-width:85%;padding:9px 12px;border-radius:15px;font-size:.92rem;line-height:1.4;white-space:pre-wrap;word-break:break-word}
+.cf-bot{background:#fff;border:1px solid #e2e8e2;border-bottom-left-radius:4px;align-self:flex-start}
+.cf-user{background:#1e7a4c;color:#fff;border-bottom-right-radius:4px;align-self:flex-end}
+.cf-prod{background:#fff;border:1px solid #d9e6d9;border-radius:12px;padding:8px 10px;font-size:.88rem;align-self:flex-start;max-width:88%}
+.cf-prod b{display:block}
+.cf-prod .cf-pre{color:#14532d;font-weight:700}
+.cf-prod .cf-btns{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+.cf-prod button,.cf-prod a.cf-dueño{background:#eef7ee;border:1px solid #bcd8bc;color:#14532d;border-radius:999px;padding:5px 12px;font-size:.8rem;cursor:pointer;text-decoration:none;font-weight:600}
+.cf-prod a.cf-dueño{background:#22c064;border-color:#22c064;color:#fff}
+#cfChips{display:flex;flex-wrap:wrap;gap:7px;padding:9px 12px;background:#f4f7f4;border-top:1px solid #e6ece6}
+#cfChips:empty{display:none}
+#cfChips button{background:#fff;border:1.5px solid #1e7a4c;color:#14532d;border-radius:999px;padding:7px 13px;font-size:.86rem;font-weight:600;cursor:pointer}
+#cfChips button:active{background:#1e7a4c;color:#fff}
+.cf-entrada{display:flex;gap:8px;padding:10px 12px;border-top:1px solid #e6ece6;background:#fff}
+.cf-entrada input{flex:1;border:1.5px solid #d4ddd4;border-radius:999px;padding:10px 14px;font-size:.95rem;min-width:0}
+.cf-entrada button{background:#1e7a4c;color:#fff;border:0;border-radius:50%;width:42px;height:42px;font-size:17px;cursor:pointer;flex:none}
+.cf-escribiendo{align-self:flex-start;background:#fff;border:1px solid #e2e8e2;border-radius:15px;border-bottom-left-radius:4px;padding:10px 14px;color:#7a8a7a;font-size:.85rem}
+.cf-wa{display:inline-block;margin-top:6px;background:#22c064;color:#fff!important;padding:9px 14px;border-radius:999px;font-weight:700;font-size:.88rem;text-decoration:none}
+@media (max-width:560px){#cfPanel{right:0;bottom:0;width:100vw;height:92dvh;border-radius:18px 18px 0 0}}
+</style>
+<button id="cfBurbuja" aria-label="Abrir el asistente del Mercado" onclick="cfAbrir()">💬</button>
+<div id="cfPanel" role="dialog" aria-label="Asistente del Mercado Ciénega">
+  <div class="cf-cab">
+    <span class="cf-av">🛒</span>
+    <div><b>Mercado Ciénega</b><small>Asistente de compras y ventas</small></div>
+    <button onclick="cfCerrar()" aria-label="Cerrar">✕</button>
+  </div>
+  <div id="cfMsgs"></div>
+  <div id="cfChips"></div>
+  <form class="cf-entrada" onsubmit="cfEnviar(event)">
+    <input id="cfTexto" type="text" placeholder="Escribe tu mensaje…" autocomplete="off">
+    <input id="cfHp" type="text" style="display:none" tabindex="-1" autocomplete="off">
+    <button type="submit" aria-label="Enviar">➤</button>
+  </form>
+</div>
+<script>
+var CF_LEADS_API = 'https://script.google.com/macros/s/AKfycbwkAfve3VYodZD-ogCvBKRvWwTm5umCtYnW1RjnSDWEzCHVwVFQ_Jufl9fhdqjS3RbB/exec';
+var CF_WA = '5353704722';
+var cfEstado = 'inicio', cfDatos = { interes: '', detalle: '', nombre: '', telefono: '' }, cfAbiertoUnaVez = false;
+function cfNorm(s) { return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+function cfMsgs() { return document.getElementById('cfMsgs'); }
+function cfScroll() { var m = cfMsgs(); m.scrollTop = m.scrollHeight; }
+function cfDecir(texto, mio) {
+  var d = document.createElement('div');
+  d.className = 'cf-m ' + (mio ? 'cf-user' : 'cf-bot');
+  d.textContent = texto;
+  cfMsgs().appendChild(d); cfScroll();
+}
+function cfEscribiendo() {
+  var d = document.createElement('div');
+  d.className = 'cf-escribiendo'; d.id = 'cfTyp'; d.textContent = 'escribiendo…';
+  cfMsgs().appendChild(d); cfScroll();
+}
+function cfResponder(texto, chips) {
+  cfEscribiendo();
+  setTimeout(function () {
+    var t = document.getElementById('cfTyp'); if (t) t.remove();
+    cfDecir(texto, false);
+    cfChips(chips || []);
+  }, 420);
+}
+function cfChips(lista) {
+  var c = document.getElementById('cfChips');
+  c.innerHTML = '';
+  lista.forEach(function (ch) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.textContent = ch.t;
+    b.onclick = function () { cfTap(ch); };
+    c.appendChild(b);
+  });
+}
+function cfMenu() {
+  cfEstado = 'menu';
+  cfResponder('¿En qué te ayudo hoy?', [
+    { t: '🛒 Buscar productos', v: 'ofertas' }, { t: '🏷️ Quiero vender aquí', v: 'vender' },
+    { t: '🏠 Casa Frank', v: 'casa' }, { t: '👥 Equipo del Mercado', v: 'equipo' },
+    { t: '📍 ¿Dónde están?', v: 'donde' }]);
+}
+function cfAbrir() {
+  document.getElementById('cfPanel').classList.add('abierto');
+  document.getElementById('cfBurbuja').style.display = 'none';
+  if (!cfAbiertoUnaVez) {
+    cfAbiertoUnaVez = true;
+    cfResponder('¡Hola! 👋 Soy el asistente del Mercado Ciénega de Zapata: aquí la gente de la Ciénaga vende sus productos y servicios. Te ayudo a encontrar lo que buscas, a publicar tu anuncio o con los servicios de Casa Frank.');
+    setTimeout(cfMenu, 500);
+  }
+}
+function cfCerrar() {
+  document.getElementById('cfPanel').classList.remove('abierto');
+  document.getElementById('cfBurbuja').style.display = 'flex';
+}
+function cfTap(ch) {
+  cfDecir(ch.t, true);
+  cfRuta(ch.v, true);
+}
+var CF_TEMAS = {
+  aloj: { interes: 'Alojamiento', pregunta: '¡Claro! 🏠 Casa Frank tiene alojamiento en el Entronque de Playa Larga. ¿Para qué fechas piensas venir y cuántas personas serían?' },
+  rest: { interes: 'Restaurante', pregunta: '¡Con gusto! 🍽️ El bar-restaurante de Casa Frank te espera con comida y bebidas, en mesa o para llevar. ¿Para cuándo sería y cuántas personas son?' },
+  equipo: { interes: 'Equipo del Mercado', pregunta: 'Perfecto, te conecto con el equipo del Mercado. Cuéntame en una línea qué necesitas.' }
+};
+function cfTema(v) {
+  var tema = CF_TEMAS[v];
+  cfDatos.interes = tema.interes; cfDatos.detalle = '';
+  cfEstado = 'detalle';
+  cfResponder(tema.pregunta, [{ t: '↩️ Volver al menú', v: 'menu' }]);
+}
+function cfCasa() {
+  cfEstado = 'menu';
+  cfResponder('🏠 Casa Frank está en el Entronque de Playa Larga y ofrece alojamiento y bar-restaurante. ¿Qué te interesa?', [
+    { t: '🏠 Alojamiento', v: 'aloj' }, { t: '🍽️ Restaurante', v: 'rest' }, { t: '↩️ Menú', v: 'menu' }]);
+}
+function cfVender() {
+  cfEstado = 'menu';
+  cfEscribiendo();
+  api('destacar_info', {}).then(function (d) {
+    var t = document.getElementById('cfTyp'); if (t) t.remove();
+    if (!d || !d.ok) throw new Error('info');
+    var txt = '¡Buena idea! 🏷️ Publicar un anuncio cuesta ' + fmtCUP(d.publicar_precio_cup) + ' CUP (≈ $' + fmtUSD(d.publicar_precio_cup / S.tasa.tasa) + ' USD) y queda visible por 1 mes, cuando se confirme tu pago.';
+    if (d.destacado_precio_cup) txt += '\n⭐ También puedes destacar tu anuncio por ' + fmtCUP(d.destacado_precio_cup) + ' CUP' + (d.destacado_dias ? ' (' + d.destacado_dias + ' días)' : '') + ', para salir arriba y con estrella.';
+    var m = d.metodos || {};
+    txt += '\n\nPuedes pagar por:';
+    if (m.transfermovil) txt += '\n📱 Transfermóvil a la cuenta ' + m.transfermovil;
+    if (m.usdt) txt += '\n💠 USDT (TRC20): ' + m.usdt;
+    if (m.efectivo) txt += '\n🤝 Efectivo: ' + m.efectivo;
+    cfDecir(txt, false);
+    cfChips([{ t: '📢 Publicar mi anuncio', v: 'publicar' }, { t: '💬 Que me asesoren', v: 'asesor' }, { t: '↩️ Menú', v: 'menu' }]);
+  }).catch(function () {
+    var t = document.getElementById('cfTyp'); if (t) t.remove();
+    cfResponder('Ahora mismo no pude cargar los precios de publicación. Déjame tus datos y el equipo te explica todo.', [
+      { t: '💬 Que me asesoren', v: 'asesor' }, { t: '↩️ Menú', v: 'menu' }]);
+  });
+}
+function cfPedirContacto() {
+  var guard = null;
+  try { guard = JSON.parse(localStorage.getItem('cf_datos') || 'null'); } catch (e) {}
+  if (guard && guard.nombre && guard.telefono) {
+    cfDatos.nombre = guard.nombre; cfDatos.telefono = guard.telefono;
+    cfEstado = 'confirmar';
+    cfResponder('Ya tengo tus datos de antes: ' + guard.nombre + ' · ' + guard.telefono + '. ¿Te contactamos con esos?', [
+      { t: '✅ Sí, esos mismos', v: 'confirmar' }, { t: '✏️ Usar otros datos', v: 'otros' }]);
+    return;
+  }
+  cfEstado = 'nombre';
+  cfResponder('Para que te contacten enseguida, dime tu nombre.', [{ t: '↩️ Volver al menú', v: 'menu' }]);
+}
+function cfGuardarLead() {
+  var cuerpo = { a: 'lead', nombre: cfDatos.nombre, telefono: cfDatos.telefono, interes: cfDatos.interes, detalle: cfDatos.detalle, hp: document.getElementById('cfHp').value };
+  try { localStorage.setItem('cf_datos', JSON.stringify({ nombre: cfDatos.nombre, telefono: cfDatos.telefono })); } catch (e) {}
+  cfEstado = 'fin';
+  var hecho = function () {
+    cfResponder('¡Listo, ' + cfDatos.nombre.split(' ')[0] + '! ✅ Ya tomé tus datos y te contactan enseguida por WhatsApp.\n¿Deseas algo más?', [
+      { t: '🛒 Buscar productos', v: 'ofertas' }, { t: '🏷️ Quiero vender aquí', v: 'vender' }, { t: '↩️ Menú', v: 'menu' }]);
+    if (CF_WA && (cfDatos.interes === 'Alojamiento' || cfDatos.interes === 'Restaurante')) {
+      var txt = 'Hola Casa Frank, soy ' + cfDatos.nombre + '. Me interesa: ' + cfDatos.interes + (cfDatos.detalle ? ' — ' + cfDatos.detalle : '');
+      var d = document.createElement('div');
+      d.className = 'cf-m cf-bot';
+      d.innerHTML = 'Si prefieres, escríbenos tú directamente:<br><a class="cf-wa" target="_blank" href="https://wa.me/' + CF_WA + '?text=' + encodeURIComponent(txt) + '">💬 Abrir WhatsApp</a>';
+      cfMsgs().appendChild(d); cfScroll();
+    }
+  };
+  if (!CF_LEADS_API) { hecho(); return; }
+  fetch(CF_LEADS_API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(cuerpo) })
+    .then(function (r) { return r.json(); })
+    .then(function (r) { if (r && r.ok) hecho(); else cfFalloLead(); })
+    .catch(cfFalloLead);
+}
+function cfFalloLead() {
+  cfEstado = 'fin';
+  if (CF_WA && (cfDatos.interes === 'Alojamiento' || cfDatos.interes === 'Restaurante')) {
+    var txt = 'Hola Casa Frank, soy ' + cfDatos.nombre + '. Me interesa: ' + cfDatos.interes + (cfDatos.detalle ? ' — ' + cfDatos.detalle : '') + '. Mi teléfono: ' + cfDatos.telefono;
+    var d = document.createElement('div');
+    d.className = 'cf-m cf-bot';
+    d.innerHTML = 'No pude guardar tus datos automáticamente. Toca aquí y se envían por WhatsApp al momento:<br><a class="cf-wa" target="_blank" href="https://wa.me/' + CF_WA + '?text=' + encodeURIComponent(txt) + '">💬 Enviar por WhatsApp</a>';
+    cfMsgs().appendChild(d); cfScroll();
+    cfChips([{ t: '↩️ Volver al menú', v: 'menu' }]);
+  } else {
+    cfResponder('Uy, no pude guardar tus datos en este momento. Inténtalo de nuevo en un ratico, por favor.', [{ t: '↩️ Volver al menú', v: 'menu' }]);
+  }
+}
+function cfBuscar(termino) {
+  cfEstado = 'buscando';
+  cfEscribiendo();
+  api('productos_list', { categoria: '', q: termino }).then(function (r) {
+    var t = document.getElementById('cfTyp'); if (t) t.remove();
+    if (!r || !r.ok || !r.productos || !r.productos.length) {
+      cfResponder('Ahora mismo no hay anuncios publicados de «' + termino + '». Prueba con otra palabra o mira las categorías completas en la página.', [
+        { t: '🔎 Probar otra búsqueda', v: 'ofertas' }, { t: '🗂️ Ver las ofertas', v: 'ver_ofertas' }, { t: '↩️ Menú', v: 'menu' }]);
+      cfEstado = 'buscar_texto';
+      return;
+    }
+    cfDecir('Esto es lo que hay publicado de «' + termino + '». Para comprar, contactas directo con el dueño del anuncio:', false);
+    r.productos.slice(0, 3).forEach(function (p) {
+      var pr = precios(p);
+      var d = document.createElement('div');
+      d.className = 'cf-prod';
+      var wa = (p.telefono && typeof waLink === 'function') ? waLink(p.telefono) : '';
+      d.innerHTML = '<b></b><span class="cf-pre"></span> <span class="cf-mun"></span><div class="cf-btns"><button type="button" class="cf-ver">Ver anuncio</button>' +
+        (wa ? '<a class="cf-dueño" target="_blank">💬 Dueño del anuncio</a>' : '') + '</div>';
+      d.querySelector('b').textContent = p.titulo;
+      d.querySelector('.cf-pre').textContent = pr.main;
+      d.querySelector('.cf-mun').textContent = '· 📍 ' + (p.municipio || 'Ciénaga de Zapata');
+      d.querySelector('.cf-ver').onclick = function () { cfCerrar(); verProducto(p.id); };
+      var a = d.querySelector('.cf-dueño');
+      if (a) a.href = wa + '?text=' + encodeURIComponent('Hola, vi tu anuncio «' + p.titulo + '» en Mercado Ciénega y me interesa.');
+      cfMsgs().appendChild(d);
+    });
+    cfScroll();
+    cfChips([{ t: '🔎 Buscar otra cosa', v: 'ofertas' }, { t: '🏷️ Quiero vender aquí', v: 'vender' }, { t: '↩️ Menú', v: 'menu' }]);
+    cfEstado = 'buscar_texto';
+  }).catch(function () {
+    var t = document.getElementById('cfTyp'); if (t) t.remove();
+    cfResponder('La búsqueda falló por la conexión. ¿Seguimos con otra cosa?', [{ t: '↩️ Menú', v: 'menu' }]);
+    cfEstado = 'menu';
+  });
+}
+function cfEnviar(ev) {
+  ev.preventDefault();
+  var inp = document.getElementById('cfTexto');
+  var txt = inp.value.trim();
+  if (!txt) return;
+  inp.value = '';
+  cfDecir(txt, true);
+  cfRuta(txt, false);
+}
+function cfRuta(v, esBoton) {
+  var n = cfNorm(v);
+  if (esBoton) {
+    if (v === 'menu') return cfMenu();
+    if (v === 'aloj' || v === 'rest' || v === 'equipo') return cfTema(v);
+    if (v === 'casa') return cfCasa();
+    if (v === 'vender') return cfVender();
+    if (v === 'publicar') { cfCerrar(); try { abrirPublicar(); } catch (e) {} return; }
+    if (v === 'asesor') { cfDatos.interes = 'Quiero vender en el Mercado'; cfDatos.detalle = 'Quiere publicar un anuncio y pidió asesoría'; return cfPedirContacto(); }
+    if (v === 'ofertas') { cfEstado = 'buscar_texto'; return cfResponder('🛒 Dime qué andas buscando y lo reviso ahora mismo en los anuncios publicados.', [{ t: '↩️ Menú', v: 'menu' }]); }
+    if (v === 'donde') return cfResponder('📍 El Mercado Ciénega es la plataforma de la Ciénaga de Zapata, Matanzas; los anuncios son de vendedores de la zona y Casa Frank está en el Entronque de Playa Larga. ¿Te ayudo con algo más?', [{ t: '🛒 Buscar productos', v: 'ofertas' }, { t: '🏷️ Quiero vender aquí', v: 'vender' }, { t: '↩️ Menú', v: 'menu' }]);
+    if (v === 'contacto') return cfPedirContacto();
+    if (v === 'confirmar') return cfGuardarLead();
+    if (v === 'otros') { cfEstado = 'nombre'; return cfResponder('Dime tu nombre.', []); }
+    if (v === 'ver_ofertas') { cfCerrar(); try { irInicio(); } catch (e) {} return; }
+    return;
+  }
+  if (cfEstado === 'detalle') { cfDatos.detalle = v; return cfPedirContacto(); }
+  if (cfEstado === 'nombre') {
+    if (v.trim().length < 2) return cfResponder('¿Me repites tu nombre, por favor?', []);
+    cfDatos.nombre = v.trim();
+    cfEstado = 'telefono';
+    return cfResponder('Gracias, ' + cfDatos.nombre.split(' ')[0] + '. ¿Y tu número de WhatsApp o teléfono?', []);
+  }
+  if (cfEstado === 'telefono') {
+    var digs = v.replace(/\D/g, '');
+    if (digs.length < 7) return cfResponder('Ese número se ve incompleto. ¿Me lo escribes de nuevo? (solo dígitos, si quieres con el +53 delante)', []);
+    cfDatos.telefono = v.trim();
+    return cfGuardarLead();
+  }
+  if (cfEstado === 'buscar_texto') return cfBuscar(v.trim());
+  if (cfEstado === 'confirmar') {
+    if (/\b(si|ok|dale|esos)\b/.test(n)) return cfGuardarLead();
+    cfEstado = 'nombre'; return cfResponder('Dime tu nombre.', []);
+  }
+  if (/\b(menu|inicio|volver|atras)\b/.test(n)) return cfMenu();
+  if (/(public|anunci|destac)/.test(n) || /quiero vender/.test(n) || /^vend(er|o)\b/.test(n)) { cfDecir('🏷️ Quiero vender aquí', true); return cfVender(); }
+  if (/(casa frank|frank)/.test(n)) return cfCasa();
+  if (/(aloj|habitac|hosped|dormir|quedarme|casa particular|cuarto)/.test(n)) { cfDecir('🏠 Alojamiento', true); return cfTema('aloj'); }
+  if (/(restaur|comer|almuerz|cenar|mesa|bar\b|comida|bebida)/.test(n)) { cfDecir('🍽️ Restaurante', true); return cfTema('rest'); }
+  if (/(donde|ubicac|llegar|direccion|quedan)/.test(n)) return cfRuta('donde', true);
+  if (/(horario|abren|abierto|hora)/.test(n)) {
+    cfDatos.interes = 'Equipo del Mercado'; cfDatos.detalle = 'Pregunta por el horario';
+    return cfResponder('El horario te lo confirma el equipo al contactarte, para darte el dato exacto del día. ¿Te tomo los datos?', [{ t: '✅ Sí, contáctenme', v: 'contacto' }, { t: '↩️ Menú', v: 'menu' }]);
+  }
+  if (/(humano|persona|equipo|soporte|ayuda con|problema)/.test(n)) { cfDecir('👥 Equipo del Mercado', true); return cfTema('equipo'); }
+  var m = n.replace(/^(hola|buenas|oye|dime|por favor|favor)\s+/, '').replace(/\b(tienen|tienes|hay|venden|vende|busco|quiero|necesito|precio de|cuanto cuesta|cuesta)\b/g, '').trim();
+  if (m.length >= 3) return cfBuscar(m);
+  if (/(hola|buenas|saludos)/.test(n)) return cfMenu();
+  cfResponder('No te entendí bien. Puedo ayudarte con esto:', [
+    { t: '🛒 Buscar productos', v: 'ofertas' }, { t: '🏷️ Quiero vender aquí', v: 'vender' },
+    { t: '🏠 Casa Frank', v: 'casa' }, { t: '👥 Equipo del Mercado', v: 'equipo' }]);
+}
+</script>
+<!-- ===== fin del asistente ===== -->
+
 </body>
 </html>
