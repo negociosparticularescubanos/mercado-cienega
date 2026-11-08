@@ -71,6 +71,18 @@
     } catch (e) {}
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
+  // SHA-256 hex (para claves locales; la clave real nunca va en texto plano)
+  async function sha256(s) {
+    try {
+      const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("mc$" + String(s)));
+      return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    } catch (e) {
+      let h1 = 0x811c9dc5;
+      const str = "mc$" + String(s);
+      for (let i = 0; i < str.length; i++) { h1 ^= str.charCodeAt(i); h1 = Math.imul(h1, 0x01000193) >>> 0; }
+      return "fnv" + h1.toString(16);
+    }
+  }
 
   /* ---------- sesión ---------- */
   function cargarSesion() {
@@ -287,8 +299,101 @@
     all() {
       const demos = (window.MC_DATA && window.MC_DATA.DEMO_NEGOCIOS) || [];
       const own = this._read();
+      let hidden = [];
+      try { hidden = JSON.parse(localStorage.getItem(this.HIDE_KEY)) || []; } catch (e) {}
       const ids = new Set(own.map((b) => b.id));
-      return own.concat(demos.filter((b) => !ids.has(b.id)));
+      return own.concat(demos.filter((b) => !ids.has(b.id))).filter((b) => hidden.indexOf(b.id) < 0);
+    },
+    HIDE_KEY: "mc_negocios_hide_v1",
+    hide(id) {
+      try {
+        const h = JSON.parse(localStorage.getItem(this.HIDE_KEY)) || [];
+        if (h.indexOf(id) < 0) { h.push(id); localStorage.setItem(this.HIDE_KEY, JSON.stringify(h)); }
+      } catch (e) {}
+      this.remove(id);
+    },
+    /* ---------- mensualidad y suspensión automática ----------
+     * Cada negocio paga una cuota mensual. Si llega el día 1 y debe el mes
+     * en curso (y existía antes de ese mes), la tienda se suspende SOLA:
+     * sus productos desaparecen de la página como si no existiera, y su
+     * admin solo ve un cartel de pago en su panel. Al registrar el pago
+     * se reactiva al instante. Contratos backend futuro:
+     * cuota_registrar, negocio_suspender, negocios_list{...cuota}.
+     */
+    CUOTA_MENSUAL: 500, // CUP por mes (monto sugerido al cobrar)
+    mesKey(d) { d = d || new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); },
+    esDemo(b) { return !!(b && typeof b.id === "string" && b.id.indexOf("demo-") === 0); },
+    debeCuota(b) {
+      if (!b || this.esDemo(b)) return false;
+      const mes = this.mesKey();
+      if (b.cuota && b.cuota.meses && b.cuota.meses[mes]) return false;
+      const primero = mes + "-01";
+      if (b.fecha && b.fecha >= primero) return false; // creada este mes: gracia
+      return true;
+    },
+    suspendida(b) { return !!(b && (b.suspendidaManual || this.debeCuota(b))); },
+    motivoSusp(b) {
+      if (!b) return "";
+      if (b.suspendidaManual) return b.motivo || "Suspendida por administración";
+      if (this.debeCuota(b)) return "Cuota de " + this.mesKey() + " pendiente (" + this.CUOTA_MENSUAL + " CUP)";
+      return "";
+    },
+    setCuota(nid, mes, pago) {
+      const b = this.ensureLocal(nid);
+      if (!b) return null;
+      const l = this._read();
+      const i = l.findIndex((x) => x.id === nid);
+      if (i < 0) return null;
+      l[i].cuota = l[i].cuota || { meses: {} };
+      l[i].cuota.meses[mes] = pago;
+      l[i].cuota.ultimoPago = pago.fecha;
+      this._write(l);
+      return l[i];
+    },
+    setSuspendida(nid, on, motivo) {
+      const b = this.ensureLocal(nid);
+      if (!b) return null;
+      const l = this._read();
+      const i = l.findIndex((x) => x.id === nid);
+      if (i < 0) return null;
+      l[i].suspendidaManual = !!on;
+      l[i].motivo = on ? (motivo || "") : "";
+      this._write(l);
+      return l[i];
+    },
+    // Si es demo (vive en data.js), lo copia al almacenamiento local para poder editarlo
+    ensureLocal(id) {
+      const l = this._read();
+      let b = l.find((x) => x.id === id);
+      if (b) return b;
+      const demo = ((window.MC_DATA && window.MC_DATA.DEMO_NEGOCIOS) || []).find((x) => x.id === id);
+      if (!demo) return null;
+      const copy = JSON.parse(JSON.stringify(demo));
+      copy.createdBy = (S.user && S.user.username) || "local";
+      l.push(copy); this._write(l);
+      return copy;
+    },
+    // Acceso propio por tienda: cada negocio tiene su usuario administrador
+    async setAdmin(nid, username, password) {
+      const b = this.ensureLocal(nid);
+      if (!b) return null;
+      const l = this._read();
+      const i = l.findIndex((x) => x.id === nid);
+      if (i < 0) return null;
+      if (username) l[i].adminUser = String(username).toLowerCase();
+      if (password) l[i].adminHash = await sha256(password);
+      this._write(l);
+      return l[i];
+    },
+    // Devuelve el negocio si el usuario+clave son su admin (o null)
+    async checkAdmin(username, password) {
+      const un = String(username || "").toLowerCase();
+      if (!un || un === "admin" || !password) return null;
+      const h = await sha256(password);
+      const b = this.all().find((x) => x.adminUser && String(x.adminUser).toLowerCase() === un && x.adminHash === h);
+      if (!b) return null;
+      this.ensureLocal(b.id);
+      return this.get(b.id) || b;
     },
     get(id) { return this.all().find((b) => b.id === id) || null; },
     create(biz) {
@@ -334,6 +439,48 @@
     },
   };
 
+  /* ---------- usuarios locales (gestión del admin) ----------
+   * Contrato backend futuro: usuarios_list/create/update/delete.
+   * Hoy: registro local de quienes entran en este dispositivo + usuarios
+   * creados por el admin (funcionan con o sin conexión al servidor).
+   * Las claves se guardan como hash SHA-256, nunca en texto plano.
+   */
+  const Usuarios = {
+    KEY: "mc_usuarios_v1",
+    _read() { try { return JSON.parse(localStorage.getItem(this.KEY)) || []; } catch (e) { return []; } },
+    _write(l) { try { localStorage.setItem(this.KEY, JSON.stringify(l)); } catch (e) {} },
+    all() { return this._read(); },
+    get(u) { u = String(u || "").toLowerCase(); return this._read().find((x) => x.username === u) || null; },
+    async upsert(u) {
+      const l = this._read();
+      u = Object.assign({}, u);
+      u.username = String(u.username || "").toLowerCase();
+      if (u.password) { u.hash = await sha256(u.password); delete u.password; }
+      u.fecha = u.fecha || new Date().toISOString().slice(0, 10);
+      u.rol = u.rol === "admin" ? "admin" : "usuario";
+      const i = l.findIndex((x) => x.username === u.username);
+      if (i >= 0) { const keep = l[i].hash; Object.assign(l[i], u); if (!u.hash) l[i].hash = keep; }
+      else l.push(u);
+      this._write(l);
+      return u;
+    },
+    async check(u, password) {
+      const x = this.get(u);
+      if (!x || !x.hash) return null;
+      const h = await sha256(password);
+      return h === x.hash ? x : null;
+    },
+    remove(u) { u = String(u || "").toLowerCase(); this._write(this._read().filter((x) => x.username !== u)); },
+    recordLogin(u) {
+      try {
+        const l = this._read();
+        const un = String((u && u.username) || "").toLowerCase();
+        if (!un || l.some((x) => x.username === un)) return;
+        l.push({ username: un, nombre: (u && u.nombre) || un, telefono: (u && u.telefono) || "", rol: (u && u.rol) || "usuario", origen: (u && u.origen) || "backend", fecha: new Date().toISOString().slice(0, 10) });
+        this._write(l);
+      } catch (e) {}
+    },
+  };
   /* ---------- afiliados (colaboradores que promocionan sin duplicar) ----------
    * Modelo estilo Amazon Afiliados / Temu: enlace con ?ref, atribución 30 días,
    * comisión % configurable por negocio, kit promo (imagen + texto + link).
@@ -394,6 +541,41 @@
       try { localStorage.setItem(this.LINK_PREFIX + S.user.username, JSON.stringify(l.slice(0, 100))); } catch (e) {}
     },
     salesFor(by, pid) { return this._stats().sales.filter((x) => (!by || x.by === by) && (!pid || x.pid === pid)); },
+    salesForBiz(nid) { return this._stats().sales.filter((x) => x.negocioId === nid); },
+    // Comisiones agrupadas por colaborador para UN negocio + clics de cada uno
+    affilStats(negocio) {
+      const s = this._stats();
+      const pids = new Set((negocio.items || []).map((x) => x.id));
+      const sales = s.sales.filter((x) => x.negocioId === negocio.id);
+      const pct = (negocio.afiliados && negocio.afiliados.pct) || 0;
+      const byMap = {};
+      sales.forEach((x) => {
+        const b = byMap[x.by] || (byMap[x.by] = { by: x.by, sales: [], cup: 0, owed: 0, clicks: 0 });
+        b.sales.push(x);
+        b.cup += Number(x.cup) || 0;
+        b.owed += (Number(x.cup) || 0) * (x.pct != null ? x.pct : pct) / 100;
+      });
+      for (const k in s.clicks) {
+        const i = k.indexOf("|");
+        const by = k.slice(0, i), pid = k.slice(i + 1);
+        if (pids.has(pid) && byMap[by]) byMap[by].clicks += s.clicks[k];
+      }
+      return Object.values(byMap).sort((a, b) => b.owed - a.owed);
+    },
+    // Pagos a colaboradores: { [negocioId]: { [colaborador]: montoPagado } }
+    PAID_KEY: "mc_aff_paid_v1",
+    paidFor(nid) {
+      try { return (JSON.parse(localStorage.getItem(this.PAID_KEY)) || {})[nid] || {}; }
+      catch (e) { return {}; }
+    },
+    markPaid(nid, by, amount) {
+      try {
+        const all = JSON.parse(localStorage.getItem(this.PAID_KEY)) || {};
+        all[nid] = all[nid] || {};
+        all[nid][by] = Math.round(amount);
+        localStorage.setItem(this.PAID_KEY, JSON.stringify(all));
+      } catch (e) {}
+    },
     bizStats(negocio) {
       const s = this._stats();
       const pids = new Set((negocio.items || []).map((x) => x.id));
@@ -410,7 +592,7 @@
     S, CFG, api, setConn, on: (fn) => listeners.add(fn),
     fmtCUP, fmtUSD, precios, cupOf, waLink, esc,
     cargarSesion, guardarSesion, guardarCarrito,
-    demoList, recargarCats, cargarTasa, cachedTasa,
-    Shipping, Payments, Marketing, Engagement, Negocios, Afiliados,
+    demoList, recargarCats, cargarTasa, cachedTasa, sha256,
+    Shipping, Payments, Marketing, Engagement, Negocios, Afiliados, Usuarios,
   };
 })();

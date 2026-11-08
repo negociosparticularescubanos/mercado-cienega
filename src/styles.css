@@ -200,6 +200,17 @@ th{background:var(--fondo)}
 .vista{display:none}.vista.act{display:block}
 .prev-imgs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .prev-imgs img{width:80px;height:80px;object-fit:cover;border-radius:10px;border:1px solid var(--borde)}
+.upcard{display:flex;gap:12px;align-items:center;width:100%;border:2px dashed var(--verde);background:#eef7ee;border-radius:14px;padding:14px 16px;cursor:pointer;font-size:.95rem;text-align:left;color:inherit;font-family:inherit;margin-top:4px}
+.upcard:hover{background:#ddeddd}
+.upcard:active{transform:scale(.99)}
+.up-ico{font-size:1.9rem;flex:none}
+.up-txt{flex:1;min-width:0}
+.up-txt b{display:block;font-size:.95rem}
+.up-txt small{color:var(--gris);font-size:.8rem}
+.up-file{flex:none;font-size:.78rem;color:var(--gris);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upfile{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.upprev{display:flex;gap:8px;align-items:center;margin-top:8px}
+.upprev img{width:72px;height:72px;object-fit:cover;border-radius:10px;border:1px solid var(--borde)}
 .nota{font-size:.82rem;color:var(--gris);margin-top:6px}
 .alerta{background:#fff8e1;border:1px solid var(--acento);border-radius:10px;padding:12px;margin:12px 0;font-size:.92rem}
 .error{background:#fdecea;border:1px solid var(--rojo);color:var(--rojo);border-radius:10px;padding:10px;margin:10px 0;font-size:.92rem}

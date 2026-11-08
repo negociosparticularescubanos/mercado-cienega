@@ -21,6 +21,27 @@ Marketplace de la Ciénaga de Zapata. Arquitectura headless: `index.html + src/*
 - Buscador: texto oscuro sobre fondo claro + sugerencias en vivo (top 6 con foto/precio, clic abre el producto, Esc/clic-fuera cierra).
 - View Transitions desactivadas cuando el documento está oculto (evita "Transition was aborted").
 
+## Administración (usuario `admin`)
+- Entra con **usuario `admin`** y tu clave de administrador → vas directo al panel 👑 (funciona con o sin conexión).
+- La clave **no está en texto plano**: se guarda su hash SHA-256 en el código y se compara el hash al entrar.
+- Pestañas: **⏳ Pendientes** (pagos por aprobar —al aprobar se publica el anuncio— y anuncios en espera, con aprobar/rechazar), **👥 Usuarios** (registro de quienes entran + crear/editar/eliminar usuarios locales con roles), **🏪 Negocios** (ver, crear, editar —incluso los demo—, eliminar), **💰 Pagos**, **📦 Anuncios** (estado + aprobar + eliminar), **🏷️ Categorías**, **💱 Tasa USD**, **🔧 Ajustes**.
+- Los usuarios creados por el admin entran con su clave aunque no haya conexión. El `admin` es el único que no se puede eliminar.
+- Contratos backend futuro: `usuarios_list/create/update/delete`, `producto_aprobar`.
+- Nota: este admin es de gestión del dispositivo/navegador; la protección real contra manipulación debe vivir en tu backend (Apps Script).
+
+## 💰 Mensualidad y suspensión automática
+- Cada negocio paga cuota mensual (**500 CUP/mes** sugerido). Si llega el **día 1** debiendo el mes (con gracia si se creó ese mismo mes; demos de ejemplo exentas), la tienda **se suspende sola**: sus productos **desaparecen** de la búsqueda, lista de tiendas, enlaces y checkout, como si no existiera.
+- Su admin **sí puede entrar** a su perfil, pero solo ve un **cartel ⛔ que no deja hacer nada**: avisa de la deuda y que debe pagar para seguir usando los servicios.
+- El admin global lo controla todo en **🏪 Negocios**: columna Estado (✅/⛔ + motivo), último pago, contador de suspendidas, **💰 Cobrar** (mes/monto/método → reactiva al instante), **⛔/✅ Suspender/Reactivar** manual, más Ver/📊/✎/🗑.
+- Contratos backend futuro: `cuota_registrar`, `negocio_suspender`.
+
+## 🏪 Panel por tienda (administrador de cada negocio)
+- Cada negocio tiene su **usuario + clave propios** (hash SHA-256): entra con ellos y va directo a **📊 Mi tienda**.
+- Ahí ve **lo que vendieron los colaboradores por otras redes** (WhatsApp/Facebook/Instagram): tabla por colaborador (clics, ventas, vendido, comisión, pagado, **a pagar**) con botón ✓ Pagado, más el **detalle de cada venta** (fecha, producto, colaborador, comprador, total, comisión, %).
+- Todo lo demás en el mismo sitio: **inventario** (agregar/editar/eliminar con stock), **perfil** (nombre, pagos, QR, domicilio), **programa de afiliados** (% y on/off), **mi clave** y botones a la tienda pública.
+- El dueño (o el admin global desde 🏪 Negocios → 📊) define el acceso en **🔑 Acceso admin de la tienda**. Nadie puede abrir el panel de otra tienda.
+- Contratos backend futuro: `negocio_set_admin`, `ventas_por_negocio` (hoy todo es local por dispositivo).
+
 ## Afiliados / colaboradores (nuevo)
 - Modelo Amazon Afiliados/Temu: enlace `#p-ID-r-usuario`, atribución **30 días**, comisión % por negocio (gral 5%).
 - Colaborador: botón 🤝 en el producto → kit (enlace + imagen promo 720×900 con QR + botón WhatsApp + descarga). El botón WhatsApp comparte **la imagen + texto + enlace juntos** (Web Share con archivos en el celular; en PC la descarga y abre wa.me con el texto listo para adjuntarla). Vista "🤝 Mis promociones" (menú usuario): clics/ventas/ganado por enlace.

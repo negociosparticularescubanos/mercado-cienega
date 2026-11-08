@@ -118,16 +118,26 @@
     <div class="nota">Gana comisión promocionando productos <b>sin duplicar anuncios</b>: tu enlace lleva directo a la tienda y cada venta en 30 días cuenta para ti.</div>
     <div id="afLista"></div>
   </div>
+  <div id="v-tienda" class="vista">
+    <h2 class="sec">📊 Mi tienda</h2>
+    <div id="tiendaPanel"></div>
+  </div>
   <div id="v-admin" class="vista">
     <h2 class="sec">⚙️ Administración</h2>
     <div class="tabs" id="adminTabs">
-      <button class="act" onclick="window.MC_APP.adminTab('pagos',this)">💰 Pagos pendientes</button>
-      <button onclick="window.MC_APP.adminTab('prods',this)">📦 Productos</button>
+      <button class="act" onclick="window.MC_APP.adminTab('pend',this)">⏳ Pendientes</button>
+      <button onclick="window.MC_APP.adminTab('users',this)">👥 Usuarios</button>
+      <button onclick="window.MC_APP.adminTab('biz',this)">🏪 Negocios</button>
+      <button onclick="window.MC_APP.adminTab('pagos',this)">💰 Pagos</button>
+      <button onclick="window.MC_APP.adminTab('prods',this)">📦 Anuncios</button>
       <button onclick="window.MC_APP.adminTab('cats',this)">🏷️ Categorías</button>
       <button onclick="window.MC_APP.adminTab('tasa',this)">💱 Tasa USD</button>
       <button onclick="window.MC_APP.adminTab('ajustes',this)">🔧 Ajustes</button>
     </div>
-    <div id="adm-pagos"></div>
+    <div id="adm-pend"></div>
+    <div id="adm-users" style="display:none"></div>
+    <div id="adm-biz" style="display:none"></div>
+    <div id="adm-pagos" style="display:none"></div>
     <div id="adm-prods" style="display:none"></div>
     <div id="adm-cats" style="display:none"></div>
     <div id="adm-tasa" style="display:none"></div>

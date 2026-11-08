@@ -10,6 +10,42 @@
   let imgsSel = [], imgsNombres = [], catManual = false;
   let bizActual = null, topSeller = null, topVisto = null, topComp = null;
 
+  // Acceso administrador local (hash SHA-256 de la clave; nunca en texto plano).
+  // El panel admin completo funciona con o sin conexión al servidor.
+  const ADMIN_HASH = "d6709bf4f4908b44260f727f8e575136143345fbda8bba4d2de56c9ec83b531a";
+  function isAdmin() { const u = S().user; return !!(u && u.rol === "admin"); }
+  let tiendaActual = null, bizReturnTo = null;
+  // ¿puede este usuario gestionar el negocio? (dueño, admin global o admin de esa tienda)
+  function canManageBiz(b) {
+    const u = S().user;
+    if (!u || !b) return false;
+    if (u.rol === "admin") return true;
+    if (b.createdBy && b.createdBy === u.username) return true;
+    if (u.rol === "tienda" && (u.negocioId === b.id || (b.adminUser && String(b.adminUser).toLowerCase() === String(u.username).toLowerCase()))) return true;
+    return false;
+  }
+  // negocio de la sesión tienda (con respaldo por si la sesión guardada es vieja)
+  function tiendaId() {
+    const u = S().user;
+    if (!u || u.rol !== "tienda") return null;
+    if (u.negocioId) return u.negocioId;
+    try {
+      const b = st().Negocios.all().find((x) => x.adminUser && String(x.adminUser).toLowerCase() === String(u.username).toLowerCase());
+      if (b) { u.negocioId = b.id; st().guardarSesion(); return b.id; }
+    } catch (e) {}
+    return null;
+  }
+  function openTienda(nid) {
+    const M = st();
+    const b = M.Negocios.get(nid);
+    if (!b) { toast("Negocio no encontrado"); return; }
+    const u = S().user;
+    const ok = u && (u.rol === "admin" || (b.createdBy && b.createdBy === u.username) || (u.rol === "tienda" && (u.negocioId === nid || tiendaId() === nid)));
+    if (!ok) { toast("Solo el administrador de esta tienda"); return; }
+    tiendaActual = nid;
+    mostrar("tienda");
+  }
+
   /* ---------- helpers ---------- */
   function toast(msg) {
     let box = $("toasts");
@@ -171,11 +207,13 @@
   }
   // Ofertas de los negocios (inventarios) unificadas con el catálogo general.
   // Cada oferta sabe su negocio, pagos, stock y si acepta transferencia.
+  // Las tiendas suspendidas (cuota impaga) no existen en la página.
   function bizOffers() {
     const M = st();
     const out = [];
     try {
       M.Negocios.all().forEach((b) => {
+        if (M.Negocios.suspendida(b)) return;
         (b.items || []).forEach((it) => {
           out.push(Object.assign({}, it, {
             negocioId: b.id, negocioNombre: b.nombre,
@@ -275,13 +313,14 @@
 
   /* ---------- navegación ---------- */
   function mostrar(v) {
-    ["inicio", "mios", "pedidos", "admin", "negocios", "negocio", "afiliado"].forEach((x) => { $("v-" + x).className = "vista" + (x === v ? " act" : ""); });
+    ["inicio", "mios", "pedidos", "admin", "negocios", "negocio", "afiliado", "tienda"].forEach((x) => { $("v-" + x).className = "vista" + (x === v ? " act" : ""); });
     if (v === "mios") cargarMios();
     if (v === "pedidos") cargarPedidos();
     if (v === "admin") cargarAdmin();
     if (v === "negocios") cargarNegocios();
     if (v === "negocio") pintarNegocio();
     if (v === "afiliado") cargarAfiliado();
+    if (v === "tienda") cargarTienda();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   function goHome() { cat = ""; const i = $("q"); if (i) i.value = ""; hideSugs(); sortBy = "ventas"; const s = $("sortSel"); if (s) s.value = "ventas"; q = ""; mostrar("inicio"); pintarCats(); renderGrid(); }
@@ -483,6 +522,10 @@
     const M = st();
     let p = prods.find((x) => x.id === id);
     if (!p) { toast("Anuncio no encontrado"); return; }
+    if (p.negocioId) {
+      const bz = M.Negocios.get(p.negocioId);
+      if (bz && M.Negocios.suspendida(bz)) { toast("⛔ Este anuncio no está disponible"); return; }
+    }
     try {
       const r = await M.api("producto_get", { id });
       if (r.ok) p = Object.assign({ pago: p.pago || "consultar", pagos: p.pagos, negocioId: p.negocioId, negocioNombre: p.negocioNombre, stock: p.stock, local: p.local }, r.producto);
@@ -614,7 +657,8 @@
     S().carrito.forEach((x) => {
       if (!x.negocioId) return;
       const b = M.Negocios.get(x.negocioId);
-      if (b && b.delivery && b.delivery.activo) {
+      if (!b || M.Negocios.suspendida(b)) return; // suspendida: sin domicilio
+      if (b.delivery && b.delivery.activo) {
         if (!map[b.id]) map[b.id] = { biz: b, n: 0 };
         map[b.id].n += x.cantidad;
       }
@@ -800,44 +844,94 @@
     $("tabR").addEventListener("click", () => tab(1));
     $("doLogin").addEventListener("click", async () => {
       const M2 = st();
+      const btn = $("doLogin");
+      const oldTxt = btn.textContent;
+      btn.disabled = true; btn.textContent = "⏳ Entrando…";
+      const username = $("a_user").value.trim().toLowerCase();
+      const password = $("a_pass").value;
+      const fail = (m) => { $("authErr").innerHTML = `<div class="error">${M2.esc(m)}</div>`; btn.disabled = false; btn.textContent = oldTxt; };
+      const localSession = (u, saludo) => {
+        S().token = "local-" + Date.now().toString(36);
+        S().user = { username: u.username, nombre: u.nombre || u.username, telefono: u.telefono || "", rol: u.rol || "usuario", negocioId: u.negocioId || null, local: true };
+        M2.guardarSesion();
+        try { S().carrito = JSON.parse(localStorage.getItem("mc_cart_" + u.username) || "[]"); } catch (e) { S().carrito = []; }
+        pintarUser(); actualizarN(); cerrarModal(); toast(saludo);
+        if ((u.rol || "usuario") === "admin") mostrar("admin");
+      };
       try {
-        const r = await M2.api("login", { username: $("a_user").value.trim().toLowerCase(), password: $("a_pass").value });
-        if (!r.ok) throw new Error(r.error);
-        S().token = r.token; S().user = r.user; M2.guardarSesion();
-        try { S().carrito = JSON.parse(localStorage.getItem("mc_cart_" + S().user.username) || "[]"); } catch (e) { S().carrito = []; }
-        pintarUser(); actualizarN();
-        if (r.user.must_change) { pedirCambioClave(true); return; }
-        cerrarModal(); toast("¡Hola, " + (r.user.nombre || r.user.username) + "! 👋");
-      } catch (e) { $("authErr").innerHTML = `<div class="error">${M2.esc(e.message)}</div>`; }
+        // ① Administrador del sistema (acceso local, sin depender del servidor)
+        if (username === "admin") {
+          const h = await M2.sha256(password);
+          if (h !== ADMIN_HASH) { fail("Credenciales inválidas"); return; }
+          M2.Usuarios.upsert({ username: "admin", nombre: "Administrador", rol: "admin", origen: "local", password });
+          localSession({ username: "admin", nombre: "Administrador", rol: "admin" }, "👑 Bienvenido, Admin");
+          return;
+        }
+        // ①b Administrador de una tienda (usuario propio por negocio)
+        const tbiz = await M2.Negocios.checkAdmin(username, password);
+        if (tbiz) {
+          localSession({ username: tbiz.adminUser, nombre: tbiz.nombre, rol: "tienda", negocioId: tbiz.id }, "🏪 Hola, " + tbiz.nombre);
+          tiendaActual = tbiz.id;
+          mostrar("tienda");
+          return;
+        }
+        // ② Servidor (Google Sheets / backend)
+        let r = null, offline = false;
+        try { r = await M2.api("login", { username, password }); }
+        catch (e) { offline = true; }
+        if (!offline && r && r.ok) {
+          S().token = r.token; S().user = r.user; M2.guardarSesion();
+          M2.Usuarios.recordLogin({ username: r.user.username, nombre: r.user.nombre, telefono: r.user.telefono, rol: r.user.rol, origen: "backend" });
+          try { S().carrito = JSON.parse(localStorage.getItem("mc_cart_" + S().user.username) || "[]"); } catch (e) { S().carrito = []; }
+          pintarUser(); actualizarN();
+          if (r.user.must_change) { pedirCambioClave(true); return; }
+          cerrarModal(); toast("¡Hola, " + (r.user.nombre || r.user.username) + "! 👋");
+          return;
+        }
+        // ③ Usuarios creados por el admin (funcionan con o sin conexión)
+        const lu = await M2.Usuarios.check(username, password);
+        if (lu) {
+          if (lu.rol === "admin" && lu.origen !== "local") { fail("Credenciales inválidas"); return; }
+          localSession(lu, lu.rol === "admin" ? "👑 Bienvenido, Admin" : ("¡Hola, " + (lu.nombre || lu.username) + "! 👋"));
+          return;
+        }
+        fail((!offline && r && r.error) || "Usuario o clave incorrectos");
+      } catch (e) { fail(e.message); }
     });
     $("doReg").addEventListener("click", async () => {
       const M2 = st();
       try {
-        const r = await M2.api("register", { username: $("r_user").value.trim().toLowerCase(), password: $("r_pass").value, nombre: $("r_nom").value, telefono: $("r_tel").value });
+        const un = $("r_user").value.trim().toLowerCase();
+        if (un === "admin") throw new Error("Ese nombre está reservado");
+        const r = await M2.api("register", { username: un, password: $("r_pass").value, nombre: $("r_nom").value, telefono: $("r_tel").value });
         if (!r.ok) throw new Error(r.error);
         S().token = r.token; S().user = r.user; M2.guardarSesion(); pintarUser(); actualizarN();
+        M2.Usuarios.recordLogin({ username: r.user.username, nombre: r.user.nombre, telefono: r.user.telefono, rol: r.user.rol, origen: "backend" });
         cerrarModal(); toast("Cuenta creada ✅");
       } catch (e) { $("authErr").innerHTML = `<div class="error">${M2.esc(e.message)}</div>`; }
     });
   }
   function menuUser() {
     const M = st(); const u = S().user;
-    abrirModal(`<h3>👤 ${M.esc(u.nombre || u.username)}</h3><p class="p-dato">Usuario: <b>${M.esc(u.username)}</b></p>` +
+    abrirModal(`<h3>${u.rol === "tienda" ? "🏪" : "👤"} ${M.esc(u.nombre || u.username)}</h3><p class="p-dato">Usuario: <b>${M.esc(u.username)}</b></p>` +
       (u.telefono ? `<p class="p-dato">Tel: ${M.esc(u.telefono)}</p>` : "") +
-      `<button class="btn bloque gris" id="uMios">📢 Mis anuncios</button>` +
-      `<button class="btn bloque gris" id="uPed">🧾 Mis pedidos</button>` +
-      `<button class="btn bloque gris" id="uAf">🤝 Mis promociones</button>` +
+      (u.rol === "tienda" && tiendaId() ? `<button class="btn bloque verde" id="uTienda">🏪 Mi tienda</button>` : "") +
+      (u.rol !== "tienda" ? `<button class="btn bloque gris" id="uMios">📢 Mis anuncios</button>` : "") +
+      (u.rol !== "tienda" ? `<button class="btn bloque gris" id="uPed">🧾 Mis pedidos</button>` : "") +
+      (u.rol !== "tienda" ? `<button class="btn bloque gris" id="uAf">🤝 Mis promociones</button>` : "") +
       (u.rol === "admin" ? `<button class="btn bloque verde" id="uAdm">⚙️ Administración</button>` : "") +
       `<button class="btn bloque gris" id="uClave">🔑 Cambiar clave</button>` +
       `<button class="btn bloque rojo" id="uSalir">Salir</button>`);
-    $("uMios").addEventListener("click", () => { cerrarModal(); mostrar("mios"); });
-    $("uPed").addEventListener("click", () => { cerrarModal(); mostrar("pedidos"); });
-    $("uAf").addEventListener("click", () => { cerrarModal(); mostrar("afiliado"); });
+    const t = $("uTienda"); if (t) t.addEventListener("click", () => { cerrarModal(); tiendaActual = tiendaId() || S().user.negocioId; mostrar("tienda"); });
+    const m = $("uMios"); if (m) m.addEventListener("click", () => { cerrarModal(); mostrar("mios"); });
+    const pd = $("uPed"); if (pd) pd.addEventListener("click", () => { cerrarModal(); mostrar("pedidos"); });
+    const af = $("uAf"); if (af) af.addEventListener("click", () => { cerrarModal(); mostrar("afiliado"); });
     const a = $("uAdm"); if (a) a.addEventListener("click", () => { cerrarModal(); mostrar("admin"); });
-    $("uClave").addEventListener("click", () => pedirCambioClave(false));
+    if (S().user && S().user.local) { const cb = $("uClave"); if (cb) cb.style.display = "none"; }
+    else $("uClave").addEventListener("click", () => pedirCambioClave(false));
     $("uSalir").addEventListener("click", async () => {
-      try { await st().api("logout", {}); } catch (e) {}
-      S().token = null; S.user = null; S().carrito = []; st().guardarSesion();
+      try { st().api("logout", {}).catch(() => {}); } catch (e) {}
+      S().token = null; S().user = null; S().carrito = []; st().guardarSesion();
       pintarUser(); actualizarN(); cerrarModal(); goHome();
     });
   }
@@ -855,7 +949,14 @@
       } catch (e) { $("cErr").innerHTML = `<div class="error">${M.esc(e.message)}</div>`; }
     });
   }
-  function pintarUser() { const b = $("btnUser"); if (b) b.textContent = S().user ? "👤 " + (S().user.nombre || S().user.username).split(" ")[0] : "👤 Entrar"; }
+  function pintarUser() {
+    const b = $("btnUser");
+    if (!b) return;
+    if (!S().user) b.textContent = "👤 Entrar";
+    else if (S().user.rol === "admin") b.textContent = "👑 Admin";
+    else if (S().user.rol === "tienda") b.textContent = "🏪 " + (S().user.nombre || S().user.username).split(" ")[0].slice(0, 12);
+    else b.textContent = "👤 " + (S().user.nombre || S().user.username).split(" ")[0];
+  }
 
   /* ---------- publicar ---------- */
   function detectarCategoria() {
@@ -893,7 +994,9 @@
       `<div style="display:flex;gap:12px"><div style="flex:1"><label>Precio</label><input type="number" id="p_pre" min="1" step="any"></div>` +
       `<div><label>Moneda</label><div class="radiofila"><label><input type="radio" name="p_mon" value="CUP" checked> CUP</label><label><input type="radio" name="p_mon" value="USD"> USD</label></div></div></div>` +
       `<div class="nota" id="p_conv"></div><label>Descripción</label><textarea id="p_desc" maxlength="2000"></textarea>` +
-      `<label>Foto</label><input type="file" id="p_imgs" accept="image/*"><div class="prev-imgs" id="p_prev"></div><div class="nota" id="p_peso"></div>` +
+      `<label>Foto del producto</label>` +
+      `<button type="button" class="upcard" id="p_imgs_btn"><span class="up-ico">📷</span><span class="up-txt"><b>Toca para elegir la foto</b><small>Galería o cámara · se comprime sola</small></span><span class="up-file" id="p_imgs_nom">Sin foto</span></button>` +
+      `<input type="file" id="p_imgs" class="upfile" accept="image/*" tabindex="-1"><div class="upprev" id="p_prev"></div><div class="nota" id="p_peso"></div>` +
       `<label>Teléfono</label><input type="tel" id="p_tel" value="${M.esc(S().user.telefono || "")}">` +
       `<label>Municipio</label><input type="text" id="p_mun" placeholder="Ej: Ciénaga de Zapata">` +
       `<button class="btn bloque" id="btnPub">Continuar al pago →</button><div id="pErr"></div>`);
@@ -903,12 +1006,19 @@
       $("p_conv").textContent = v > 0 ? (m === "CUP" ? `Se mostrará como ${M.fmtCUP(v)} CUP (≈ $${M.fmtUSD(v / M.S.tasa.tasa)} USD)` : `Se mostrará como $${M.fmtUSD(v)} USD (≈ ${M.fmtCUP(v * M.S.tasa.tasa)} CUP)`) : "";
     });
     document.querySelectorAll('input[name=p_mon]').forEach((r) => r.addEventListener("change", () => $("p_pre").dispatchEvent(new Event("input"))));
+    $("p_imgs_btn").addEventListener("click", () => $("p_imgs").click());
     $("p_imgs").addEventListener("change", async () => {
       const files = Array.prototype.slice.call($("p_imgs").files, 0, 1);
+      if (!files.length) { $("p_imgs_nom").textContent = "Sin foto"; $("p_prev").innerHTML = ""; $("p_peso").textContent = ""; return; }
+      $("p_imgs_nom").textContent = "📎 " + (files[0].name || "foto elegida");
       $("p_prev").innerHTML = "⏳ Comprimiendo…"; imgsSel = [];
       for (const f of files) { try { const c = await comprimirImagen(f); imgsSel.push(c); } catch (e) {} }
-      $("p_prev").innerHTML = imgsSel.length ? "🖼️ lista" : "";
-      $("p_peso").textContent = imgsSel.length ? "1 foto lista (comprimida)" : "";
+      if (imgsSel.length) {
+        const u = "data:" + imgsSel[0].tipo + ";base64," + imgsSel[0].datos;
+        $("p_prev").innerHTML = `<img src="${u}" alt="Vista previa"><button type="button" class="mini-btn" id="p_imgs_q">✕ Quitar</button>`;
+        $("p_imgs_q").addEventListener("click", () => { $("p_imgs").value = ""; imgsSel = []; imgsNombres = []; $("p_imgs_nom").textContent = "Sin foto"; $("p_prev").innerHTML = ""; $("p_peso").textContent = ""; });
+      } else $("p_prev").innerHTML = "";
+      $("p_peso").textContent = imgsSel.length ? "✅ 1 foto lista (comprimida)" : "";
       imgsNombres = files.map((f) => f.name); autoCategoria();
     });
     const sel = $("p_cat"); if (sel) { sel.value = cats.includes("Otros") ? "Otros" : cats[0]; sel.addEventListener("change", () => { catManual = true; $("p_catnota").textContent = ""; }); }
@@ -1037,7 +1147,10 @@
   function adminTab(t, btn) {
     Array.prototype.forEach.call($("adminTabs").children, (b) => b.className = "");
     btn.className = "act";
-    ["pagos", "prods", "cats", "tasa", "ajustes"].forEach((x) => { $("adm-" + x).style.display = x === t ? "block" : "none"; });
+    ["pend", "users", "biz", "pagos", "prods", "cats", "tasa", "ajustes"].forEach((x) => { $("adm-" + x).style.display = x === t ? "block" : "none"; });
+    if (t === "pend") adminPendientes();
+    if (t === "users") adminUsuarios();
+    if (t === "biz") adminNegocios();
     if (t === "pagos") adminPagos();
     if (t === "prods") adminProds();
     if (t === "cats") adminCats();
@@ -1046,7 +1159,186 @@
   }
   async function cargarAdmin() {
     if (!S().user || S().user.rol !== "admin") { mostrar("inicio"); return; }
-    adminPagos();
+    adminPendientes();
+  }
+  /* ---------- pendientes de aprobación ---------- */
+  async function adminPendientes() {
+    const M = st(); const box = $("adm-pend");
+    box.innerHTML = `<div class="vacio">⏳ Revisando pendientes…</div>`;
+    let pagos = [], prods = [], offMsg = "";
+    try {
+      const r = await M.api("pagos_list", {});
+      if (r.ok) pagos = (r.pagos || []).filter((p) => p.estado === "pendiente");
+      else offMsg = r.error;
+    } catch (e) { offMsg = "Sin conexión al servidor"; }
+    try {
+      const r = await M.api("productos_admin", {});
+      if (r.ok) prods = (r.productos || []).filter((p) => p.estado === "pendiente");
+    } catch (e) {}
+    let h = `<h3>⏳ Por aprobar (${pagos.length + prods.length})</h3>`;
+    if (offMsg && !pagos.length && !prods.length) h += `<div class="nota">${M.esc(offMsg)}. Los anuncios de negocios locales se publican al instante, sin aprobación.</div>`;
+    if (pagos.length) {
+      h += `<h4>💰 Pagos (al aprobar se publica el anuncio)</h4><table><tr><th>Fecha</th><th>Tipo</th><th>Anuncio</th><th>Usuario</th><th>Método</th><th>Monto</th><th></th></tr>` +
+        pagos.map((p) => `<tr><td>${M.esc(p.fecha)}</td><td>${p.tipo === "publicar" ? "📢" : "⭐"}</td><td>${M.esc(p.titulo)}</td><td>${M.esc(p.usuario)}</td><td>${M.esc(p.metodo)} ${M.esc(p.referencia)}</td><td>${M.fmtCUP(p.monto_cup)} CUP</td>` +
+          `<td style="white-space:nowrap"><button class="mini-btn ok" data-pok="${p.id}">✓ Aprobar</button> <button class="mini-btn no" data-pno="${p.id}">✕</button></td></tr>`).join("") + `</table>`;
+    }
+    if (prods.length) {
+      h += `<h4>📦 Anuncios en espera</h4><table><tr><th>Anuncio</th><th>Precio</th><th>Vendedor</th><th></th></tr>` +
+        prods.map((p) => `<tr><td>${M.esc(p.titulo)}</td><td>${M.precios(p).main}</td><td>${M.esc(p.vendedor || p.usuario || "—")}</td>` +
+          `<td style="white-space:nowrap"><button class="mini-btn ok" data-aok="${p.id}">✓ Aprobar</button> <button class="mini-btn no" data-ano="${p.id}">✕ Rechazar</button></td></tr>`).join("") + `</table>`;
+    }
+    if (!pagos.length && !prods.length && !offMsg) h += `<div class="vacio">✅ Nada pendiente. Todo al día.</div>`;
+    box.innerHTML = h;
+    box.querySelectorAll("[data-pok]").forEach((b) => b.addEventListener("click", async () => { await M.api("pago_aprobar", { id: b.dataset.pok }); adminPendientes(); }));
+    box.querySelectorAll("[data-pno]").forEach((b) => b.addEventListener("click", async () => { await M.api("pago_rechazar", { id: b.dataset.pno }); adminPendientes(); }));
+    box.querySelectorAll("[data-aok]").forEach((b) => b.addEventListener("click", async () => {
+      const r = await M.api("producto_aprobar", { id: b.dataset.aok });
+      if (r.ok) { toast("✅ Anuncio aprobado"); adminPendientes(); }
+      else toast("⚠️ " + (r.error || "el servidor no tiene aprobación directa; aprueba su pago"));
+    }));
+    box.querySelectorAll("[data-ano]").forEach((b) => b.addEventListener("click", async () => {
+      if (!confirm("¿Rechazar y eliminar este anuncio?")) return;
+      await M.api("producto_delete", { id: b.dataset.ano });
+      adminPendientes();
+    }));
+  }
+  /* ---------- usuarios ---------- */
+  function adminUsuarios() {
+    const M = st(); const box = $("adm-users");
+    const paint = (backend) => {
+      const locales = M.Usuarios.all();
+      let h = `<div style="display:flex;align-items:center;gap:8px"><h3 style="margin:0">👥 Usuarios (${(backend || []).length + locales.length})</h3><span style="flex:1"></span><button class="btn" id="uNew" style="margin:0">＋ Crear usuario</button></div>`;
+      if (backend && backend.length) {
+        h += `<h4>🌐 En el servidor (se gestionan en el backend)</h4><table><tr><th>Usuario</th><th>Nombre</th><th>Teléfono</th><th>Rol</th></tr>` +
+          backend.map((u) => `<tr><td><b>${M.esc(u.username || u.usuario || "")}</b></td><td>${M.esc(u.nombre || "")}</td><td>${M.esc(u.telefono || "")}</td><td>${M.esc(u.rol || "usuario")}</td></tr>`).join("") + `</table>`;
+      }
+      h += `<h4>📱 En este dispositivo (crear, editar y eliminar aquí)</h4>` + (locales.length ?
+        `<table><tr><th>Usuario</th><th>Nombre</th><th>Teléfono</th><th>Rol</th><th>Origen</th><th>Desde</th><th></th></tr>` +
+        locales.map((u) => `<tr><td><b>${M.esc(u.username)}</b></td><td>${M.esc(u.nombre || "")}</td><td>${M.esc(u.telefono || "")}</td>` +
+          `<td>${u.rol === "admin" ? "👑 admin" : "usuario"}</td><td>${M.esc(u.origen || "local")}</td><td>${M.esc(u.fecha || "")}</td>` +
+          `<td style="white-space:nowrap"><button class="mini-btn" data-uedit="${M.esc(u.username)}">✎ Editar</button>` +
+          (u.username === "admin" ? `` : ` <button class="mini-btn no" data-udel="${M.esc(u.username)}">🗑</button>`) + `</td></tr>`).join("") + `</table>`
+        : `<div class="vacio">Aún no hay usuarios registrados aquí.</div>`);
+      box.innerHTML = h;
+      $("uNew").addEventListener("click", () => userForm(null));
+      box.querySelectorAll("[data-uedit]").forEach((b) => b.addEventListener("click", () => userForm(b.dataset.uedit)));
+      box.querySelectorAll("[data-udel]").forEach((b) => b.addEventListener("click", async () => {
+        if (!confirm(`¿Eliminar al usuario "${b.dataset.udel}"?`)) return;
+        M.Usuarios.remove(b.dataset.udel);
+        if (S().user && S().user.username === b.dataset.udel) { S().token = null; S().user = null; M.guardarSesion(); pintarUser(); }
+        adminUsuarios(); toast("Usuario eliminado");
+      }));
+    };
+    paint(null); // local al instante, sin esperar al servidor
+    M.api("usuarios_list", {}).then((r) => {
+      if (r.ok && Array.isArray(r.usuarios) && r.usuarios.length && $("adm-users") === box) paint(r.usuarios);
+    }).catch(() => {});
+  }
+  function userForm(username) {
+    const M = st();
+    const u = username ? M.Usuarios.get(username) : null;
+    abrirModal(`<h3>👤 ${u ? "Editar usuario" : "Crear usuario"}</h3>` +
+      (u
+        ? `<div class="nota">Usuario: <b>${M.esc(u.username)}</b> (${M.esc(u.origen || "local")})</div>`
+        : `<label>Usuario *</label><input type="text" id="fu_user" maxlength="30" placeholder="ej: juan_92">`) +
+      `<label>Nombre</label><input type="text" id="fu_nom" maxlength="60" value="${M.esc(u ? u.nombre : "")}">` +
+      `<label>Teléfono / WhatsApp</label><input type="tel" id="fu_tel" value="${M.esc(u ? u.telefono : "")}">` +
+      `<label>Rol</label><select id="fu_rol"><option value="usuario"${u && u.rol !== "admin" ? " selected" : ""}>usuario</option><option value="admin"${u && u.rol === "admin" ? " selected" : ""}>👑 admin</option></select>` +
+      `<label>${u ? "Nueva clave (vacío = no cambiar)" : "Clave *"}</label><input type="password" id="fu_pass" autocomplete="new-password">` +
+      `<button class="btn bloque" id="fuGo">${u ? "Guardar" : "Crear"}</button><div id="fuErr"></div>`, true);
+    $("fuGo").addEventListener("click", async () => {
+      const btn = $("fuGo");
+      btn.disabled = true; btn.textContent = "⏳ Guardando…";
+      try {
+        const un = u ? u.username : $("fu_user").value.trim().toLowerCase();
+        if (!un) throw new Error("Escribe el usuario");
+        const pass = $("fu_pass").value;
+        if (!u && !pass) throw new Error("Ponle una clave");
+        if (un === "admin" && !u) throw new Error("Ese nombre está reservado");
+        await M.Usuarios.upsert({ username: un, nombre: $("fu_nom").value.trim(), telefono: $("fu_tel").value.trim(), rol: $("fu_rol").value, origen: (u && u.origen) || "local", ...(pass ? { password: pass } : {}) });
+        cerrarModal(); adminUsuarios(); toast("✅ Usuario guardado");
+      } catch (e) { $("fuErr").innerHTML = `<div class="error">${M.esc(e.message)}</div>`; btn.disabled = false; btn.textContent = u ? "Guardar" : "Crear"; }
+    });
+  }
+  /* ---------- negocios (admin): cuotas, suspensión, CRUD ---------- */
+  function adminNegocios() {
+    const M = st(); const box = $("adm-biz");
+    const list = M.Negocios.all();
+    const mes = M.Negocios.mesKey();
+    const susp = list.filter((b) => M.Negocios.suspendida(b)).length;
+    let h = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3 style="margin:0">🏪 Negocios (${list.length})</h3>` +
+      (susp ? `<span class="badge-dest">⛔ ${susp} suspendida${susp === 1 ? "" : "s"}</span>` : `<span class="nota">✅ Todas al día</span>`) +
+      `<span style="flex:1"></span><span class="nota">Cuota: ${M.fmtCUP(M.Negocios.CUOTA_MENSUAL)} CUP/mes · se suspenden solas el día 1 si deben</span>` +
+      `<button class="btn" id="bizNew" style="margin:0">＋ Crear negocio</button></div>`;
+    h += list.length ? `<table><tr><th>Negocio</th><th>Dueño</th><th>Estado</th><th>Último pago</th><th>Productos</th><th>Afiliados</th><th></th></tr>` +
+      list.map((b) => {
+        const n = (b.items || []).length;
+        const af = b.afiliados || {};
+        const sus = M.Negocios.suspendida(b);
+        const up = (b.cuota && b.cuota.ultimoPago) || "—";
+        const debe = M.Negocios.debeCuota(b) ? `<br><span class="nota">debe ${mes}</span>` : "";
+        return `<tr><td><b>🏪 ${M.esc(b.nombre)}</b>${M.Negocios.esDemo(b) ? `<br><span class="nota">demo (exenta)</span>` : ""}</td>` +
+          `<td>${M.esc(b.createdBy || "demo")}${b.adminUser ? `<br><span class="nota">👤 ${M.esc(b.adminUser)}</span>` : ""}</td>` +
+          `<td>${sus ? `⛔ Suspendida<br><span class="nota">${M.esc(M.Negocios.motivoSusp(b))}</span>` : "✅ Activa"}</td>` +
+          `<td>${M.esc(up)}${debe}</td><td>${n}</td>` +
+          `<td>${af.activo ? `✅ ${af.pct || 5}%` : "⏸"}</td>` +
+          `<td style="white-space:nowrap"><button class="mini-btn" data-bver="${M.esc(b.id)}">Ver</button> <button class="mini-btn ok" data-bpanel="${M.esc(b.id)}">📊</button><br>` +
+          `<button class="mini-btn ok" data-bcob="${M.esc(b.id)}">💰 Cobrar</button> ` +
+          (b.suspendidaManual
+            ? `<button class="mini-btn ok" data-bsus="${M.esc(b.id)}" data-on="0">✅ Reactivar</button>`
+            : `<button class="mini-btn no" data-bsus="${M.esc(b.id)}" data-on="1">⛔</button>`) +
+          ` <button class="mini-btn" data-bedit="${M.esc(b.id)}">✎</button> <button class="mini-btn no" data-bdel="${M.esc(b.id)}">🗑</button></td></tr>`;
+      }).join("") + `</table>` : `<div class="vacio">Aún no hay negocios.</div>`;
+    box.innerHTML = h;
+    $("bizNew").addEventListener("click", () => openBizCreate(null));
+    box.querySelectorAll("[data-bver]").forEach((b) => b.addEventListener("click", () => openNegocio(b.dataset.bver)));
+    box.querySelectorAll("[data-bpanel]").forEach((b) => b.addEventListener("click", () => openTienda(b.dataset.bpanel)));
+    box.querySelectorAll("[data-bedit]").forEach((b) => b.addEventListener("click", () => openBizCreate(b.dataset.bedit)));
+    box.querySelectorAll("[data-bdel]").forEach((b) => b.addEventListener("click", () => {
+      const biz = M.Negocios.get(b.dataset.bdel);
+      if (!biz) return;
+      if (!confirm(`¿Eliminar "${biz.nombre}" y su inventario?`)) return;
+      M.Negocios.hide(biz.id);
+      refrescarOfertas(); adminNegocios(); toast("Negocio eliminado");
+    }));
+    box.querySelectorAll("[data-bsus]").forEach((b) => b.addEventListener("click", () => {
+      const on = b.dataset.on === "1";
+      const biz = M.Negocios.get(b.dataset.bsus);
+      let motivo = "";
+      if (on) {
+        motivo = prompt(`Motivo de la suspensión de "${biz ? biz.nombre : ""}" (ej: impago, reclamo):`, "impago") || "";
+        if (motivo === null) return;
+      }
+      M.Negocios.setSuspendida(b.dataset.bsus, on, motivo);
+      refrescarOfertas(); adminNegocios(); toast(on ? "⛔ Tienda suspendida" : "✅ Tienda reactivada");
+    }));
+    box.querySelectorAll("[data-bcob]").forEach((b) => b.addEventListener("click", () => cobrarCuota(b.dataset.bcob)));
+  }
+  // Registrar pago de mensualidad (reactiva al instante si estaba suspendida)
+  function cobrarCuota(nid) {
+    const M = st();
+    const b = M.Negocios.get(nid);
+    if (!b) return;
+    const mes = M.Negocios.mesKey();
+    const ya = b.cuota && b.cuota.meses && b.cuota.meses[mes];
+    abrirModal(`<h3>💰 Cobrar mensualidad — ${M.esc(b.nombre)}</h3>` +
+      (ya ? `<div class="alerta">${mes} ya está pagado (${M.esc(ya.fecha)}).</div>` : (M.Negocios.debeCuota(b) ? `<div class="alerta">Debe <b>${mes}</b>. Al cobrar se reactiva al instante.</div>` : "")) +
+      `<label>Mes</label><input type="text" id="cq_mes" value="${mes}" maxlength="7" placeholder="AAAA-MM">` +
+      `<label>Monto (CUP)</label><input type="number" id="cq_monto" min="1" value="${M.Negocios.CUOTA_MENSUAL}">` +
+      `<label>Método</label><select id="cq_met"><option value="transfermovil">📱 Transfermóvil</option><option value="efectivo">🤝 Efectivo</option><option value="usdt">💠 USDT</option></select>` +
+      `<button class="btn bloque" id="cqGo">Registrar pago</button><div id="cqErr"></div>`, true);
+    $("cqGo").addEventListener("click", async () => {
+      try {
+        const mm = $("cq_mes").value.trim();
+        if (!/^\d{4}-\d{2}$/.test(mm)) throw new Error("Mes inválido (AAAA-MM)");
+        const monto = Number($("cq_monto").value);
+        if (!(monto > 0)) throw new Error("Monto inválido");
+        const hoy = new Date().toISOString().slice(0, 10);
+        M.Negocios.setCuota(nid, mm, { fecha: hoy, monto, metodo: $("cq_met").value });
+        cerrarModal(); refrescarOfertas(); adminNegocios();
+        toast("✅ Cuota de " + mm + " registrada — tienda activa");
+      } catch (e) { $("cqErr").innerHTML = `<div class="error">${M.esc(e.message)}</div>`; }
+    });
   }
   async function adminPagos() {
     const M = st(); const box = $("adm-pagos");
@@ -1063,11 +1355,25 @@
   }
   async function adminProds() {
     const M = st(); const box = $("adm-prods");
-    const r = await M.api("productos_admin", {});
-    if (!r.ok) { box.innerHTML = `<div class="error">${M.esc(r.error)}</div>`; return; }
-    box.innerHTML = `<table><tr><th>Título</th><th>Precio</th><th>Vence</th><th></th></tr>` +
-      r.productos.slice(0, 100).map((p) => `<tr><td>${M.esc(p.titulo)}</td><td>${M.precios(p).main}</td><td>${M.esc(p.fecha_exp)}</td>` +
-        `<td><button class="mini-btn no" data-x="${p.id}">🗑</button></td></tr>`).join("") + `</table>`;
+    box.innerHTML = `<div class="vacio">⏳ Cargando anuncios…</div>`;
+    let list = null, err = "";
+    try {
+      const r = await M.api("productos_admin", {});
+      if (r.ok) list = r.productos;
+      else err = r.error;
+    } catch (e) { err = "Sin conexión al servidor"; }
+    if (!list) { box.innerHTML = `<div class="error">${M.esc(err)}</div><div class="nota">Los anuncios de negocios locales se gestionan en la pestaña 🏪 Negocios.</div>`; return; }
+    box.innerHTML = `<h3>📦 Anuncios (${list.length})</h3><table><tr><th>Título</th><th>Precio</th><th>Estado</th><th>Vence</th><th></th></tr>` +
+      list.slice(0, 100).map((p) => `<tr><td>${p.destacado ? "⭐ " : ""}${M.esc(p.titulo)}</td><td>${M.precios(p).main}</td>` +
+        `<td>${p.estado === "pendiente" ? "⏳ pendiente" : p.activo ? "✅ publicado" : "⌛ vencido"}</td><td>${M.esc(p.fecha_exp || "—")}</td>` +
+        `<td style="white-space:nowrap">` +
+        (p.estado === "pendiente" ? `<button class="mini-btn ok" data-pok="${p.id}">✓ Aprobar</button> ` : "") +
+        `<button class="mini-btn no" data-x="${p.id}">🗑</button></td></tr>`).join("") + `</table>`;
+    box.querySelectorAll("[data-pok]").forEach((b) => b.addEventListener("click", async () => {
+      const r = await M.api("producto_aprobar", { id: b.dataset.pok });
+      if (r.ok) { toast("✅ Anuncio aprobado"); adminProds(); }
+      else toast("⚠️ " + (r.error || "el servidor no tiene aprobación directa; aprueba su pago"));
+    }));
     box.querySelectorAll("[data-x]").forEach((b) => b.addEventListener("click", async () => {
       if (!confirm("¿Eliminar?")) return;
       await M.api("producto_delete", { id: b.dataset.x }); adminProds();
@@ -1130,7 +1436,8 @@
   function cargarNegocios() {
     const M = st();
     const box = $("negList");
-    const list = M.Negocios.all();
+    // Las suspendidas por impago no existen en la página (solo las ve el admin)
+    const list = M.Negocios.all().filter((b) => !M.Negocios.suspendida(b));
     if (!list.length) { box.innerHTML = `<div class="vacio">Aún no hay negocios. ¡Crea el primero!</div>`; return; }
     box.innerHTML = list.map((b) => {
       const n = (b.items || []).length;
@@ -1160,9 +1467,17 @@
     const box = $("negPerfil");
     const b = M.Negocios.get(bizActual);
     if (!b) { box.innerHTML = `<div class="vacio">Negocio no encontrado.</div>`; return; }
-    const own = S().user && b.createdBy === S().user.username;
+    if (M.Negocios.suspendida(b) && !canManageBiz(b)) {
+      box.innerHTML = `<button class="mini-btn" id="bizBack">← Negocios</button>` +
+        `<div class="vacio" style="margin-top:20px">⛔ Esta tienda está suspendida temporalmente.</div>`;
+      $("bizBack").addEventListener("click", () => mostrar("negocios"));
+      return;
+    }
+    const own = canManageBiz(b);
+    const suspBanner = M.Negocios.suspendida(b)
+      ? `<div class="alerta">⛔ <b>Tienda suspendida:</b> ${M.esc(M.Negocios.motivoSusp(b))}. Tus productos están ocultos. Ponte al día en tu 📊 Panel.</div>` : "";
     const items = b.items || [];
-    let h = `<button class="mini-btn" id="bizBack">← Negocios</button>` +
+    let h = `<button class="mini-btn" id="bizBack">← Negocios</button>` + suspBanner +
       `<div class="biz-perfil-head" style="margin-top:10px">` +
       `<img class="logo" src="${M.esc(b.logo || "src/assets/banner1.jpg")}" alt="" onerror="this.onerror=null;this.src='src/assets/banner1.jpg'">` +
       `<div style="flex:1;min-width:200px"><h2 style="margin:0">🏪 ${M.esc(b.nombre)}</h2>` +
@@ -1202,7 +1517,7 @@
     }
     // Inventario
     h += `<div class="flex flex-wrap items-center gap-2" style="display:flex;align-items:center;gap:8px;margin:16px 0 10px"><h2 class="sec" style="margin:0">📦 Inventario (${items.length})</h2><span style="flex:1"></span>` +
-      (own ? `<button class="btn" style="margin:0" id="bizAddItem">＋ Agregar producto</button> <button class="mini-btn" id="bizEdit">✎ Editar negocio</button> <button class="mini-btn no" id="bizDel">🗑</button>` : "") + `</div>`;
+      (own ? `<button class="btn" style="margin:0" id="bizAddItem">＋ Agregar producto</button> <button class="mini-btn" id="bizEdit">✎ Editar negocio</button> <button class="mini-btn" id="bizPanel">📊 Panel</button> <button class="mini-btn no" id="bizDel">🗑</button>` : "") + `</div>`;
     h += items.length ? `<div class="grid">` + items.map((it) => {
       const full = Object.assign({}, it, { negocioId: b.id, negocioNombre: b.nombre, vendedor: b.nombre, telefono: it.telefono || b.telefono, municipio: it.municipio || b.municipio, pago: b.pagos.transfer ? "transfer" : "efectivo", pagos: b.pagos, delivery: b.delivery });
       return cardHTML(full) +
@@ -1229,10 +1544,12 @@
     }));
     const eb = $("bizEdit");
     if (eb) eb.addEventListener("click", () => openBizCreate(b.id));
+    const pb = $("bizPanel");
+    if (pb) pb.addEventListener("click", () => openTienda(b.id));
     const db = $("bizDel");
     if (db) db.addEventListener("click", () => {
       if (!confirm(`¿Eliminar "${b.nombre}" y su inventario?`)) return;
-      M.Negocios.remove(b.id); refrescarOfertas(); mostrar("negocios");
+      M.Negocios.hide(b.id); refrescarOfertas(); mostrar("negocios");
     });
     const afS = $("afSave");
     if (afS) afS.addEventListener("click", () => {
@@ -1240,6 +1557,24 @@
       M.Negocios.update(b.id, { afiliados: { activo: $("afAct").checked, pct } });
       refrescarOfertas(); pintarNegocio(); toast("✅ Programa actualizado");
     });
+  }
+  function vistaPreviaUp(inputId, nomId, prevId, textoVacio) {
+    const inp = $(inputId), nom = $(nomId), prev = $(prevId);
+    if (!inp) return;
+    const f = inp.files && inp.files[0];
+    const actual = inp.dataset.actual || "";
+    if (!f) {
+      if (nom) nom.textContent = actual ? "✅ Foto guardada" : textoVacio;
+      if (prev) prev.innerHTML = actual ? `<img src="${actual}" alt="Foto actual">` : "";
+      return;
+    }
+    if (nom) nom.textContent = "📎 " + (f.name || "foto elegida");
+    if (prev) {
+      const url = URL.createObjectURL(f);
+      prev.innerHTML = `<img src="${url}" alt="Vista previa"><button type="button" class="mini-btn" id="${inputId}_q">✕ Quitar</button>`;
+      const q = $(inputId + "_q");
+      if (q) q.addEventListener("click", (ev) => { ev.preventDefault(); ev.stopPropagation(); try { URL.revokeObjectURL(url); } catch (_) {} inp.value = ""; vistaPreviaUp(inputId, nomId, prevId, textoVacio); });
+    }
   }
   async function fileToDataURL(file) {
     const c = await comprimirImagen(file);
@@ -1249,7 +1584,10 @@
     const M = st();
     if (!S().user) { openAuth("Entra o crea tu cuenta para registrar tu negocio."); return; }
     const b = editId ? M.Negocios.get(editId) : null;
-    if (editId && (!b || b.createdBy !== S().user.username)) { toast("No puedes editar este negocio"); return; }
+    if (editId && !b) { toast("Negocio no encontrado"); return; }
+    if (editId && S().user.rol === "admin") M.Negocios.ensureLocal(editId);
+    if (editId && S().user.rol === "tienda") M.Negocios.ensureLocal(editId);
+    if (editId && !canManageBiz(b)) { toast("No puedes editar este negocio"); return; }
     const p = (b && b.pagos) || {};
     const d = (b && b.delivery) || {};
     abrirModal(`<h3>🏪 ${b ? "Editar negocio" : "Crear mi negocio"}</h3>` +
@@ -1265,14 +1603,25 @@
       `<label><input type="checkbox" id="bz_usd" ${p.efectivoUSD ? "checked" : ""}> 💵 Efectivo USD</label>` +
       `<label><input type="checkbox" id="bz_cambio" ${p.cupAlCambio ? "checked" : ""}> 💱 CUP al cambio USD</label></div>` +
       `<label>Cuenta de transferencia (para generar tu QR)</label><input type="text" id="bz_cuenta" placeholder="Ej: 9225 1234 5678" value="${M.esc(b ? b.transferCuenta : "")}">` +
-      `<label>Foto del negocio / logo</label><input type="file" id="bz_logo" accept="image/*">` +
-      `<label>Tu QR de transferencia (foto) — opcional si ya tienes uno</label><input type="file" id="bz_qr" accept="image/*">` +
-      `<div class="nota">Si no subes foto de QR, lo generamos automáticamente con tu cuenta.</div>` +
+      `<label>Foto del negocio / logo</label>` +
+      `<button type="button" class="upcard" id="bz_logo_btn"><span class="up-ico">📷</span><span class="up-txt"><b>Toca para elegir el logo</b><small>Galería o cámara · se verá en tu perfil</small></span><span class="up-file" id="bz_logo_nom">Sin foto</span></button>` +
+      `<input type="file" id="bz_logo" class="upfile" accept="image/*" tabindex="-1"><div class="upprev" id="bz_logo_prev"></div>` +
+      `<label>Tu QR de transferencia (foto) — opcional si ya tienes uno</label>` +
+      `<button type="button" class="upcard" id="bz_qr_btn"><span class="up-ico">📱</span><span class="up-txt"><b>Toca para subir tu QR</b><small>Foto de tu QR · si no tienes, lo creamos con tu cuenta</small></span><span class="up-file" id="bz_qr_nom">Sin foto</span></button>` +
+      `<input type="file" id="bz_qr" class="upfile" accept="image/*" tabindex="-1"><div class="upprev" id="bz_qr_prev"></div>` +
       `<label style="font-weight:700"><input type="checkbox" id="bz_del" ${d.activo ? "checked" : ""}> 🏠 Ofrezco domicilio (precio según distancia)</label>` +
       `<div style="display:flex;gap:8px"><div style="flex:1"><label>Base (CUP)</label><input type="number" id="bz_base" min="0" value="${d.base || 100}"></div>` +
       `<div style="flex:1"><label>CUP por km</label><input type="number" id="bz_porkm" min="0" value="${d.porKm || 20}"></div></div>` +
       `<label>Nota de entrega</label><input type="text" id="bz_nota" maxlength="140" value="${M.esc(d.nota || "")}" placeholder="Ej: Entrega en el día en la zona">` +
       `<button class="btn bloque" id="bzGo">Guardar negocio</button><div id="bzErr"></div>`, true);
+    $("bz_logo_btn").addEventListener("click", () => $("bz_logo").click());
+    $("bz_qr_btn").addEventListener("click", () => $("bz_qr").click());
+    if (b && b.logo && b.logo !== "src/assets/banner1.jpg") { try { $("bz_logo").dataset.actual = b.logo; } catch (_) {} }
+    if (b && b.qr) { try { $("bz_qr").dataset.actual = b.qr; } catch (_) {} }
+    vistaPreviaUp("bz_logo", "bz_logo_nom", "bz_logo_prev", "Sin foto — puedes guardar sin foto");
+    vistaPreviaUp("bz_qr", "bz_qr_nom", "bz_qr_prev", "Sin foto — lo generamos con tu cuenta");
+    $("bz_logo").addEventListener("change", () => vistaPreviaUp("bz_logo", "bz_logo_nom", "bz_logo_prev", "Sin foto — puedes guardar sin foto"));
+    $("bz_qr").addEventListener("change", () => vistaPreviaUp("bz_qr", "bz_qr_nom", "bz_qr_prev", "Sin foto — lo generamos con tu cuenta"));
     $("bzGo").addEventListener("click", async () => {
       try {
         const nom = $("bz_nom").value.trim();
@@ -1296,15 +1645,19 @@
         if (data.pagos.transfer && !data.transferCuenta && !data.qr) throw new Error("Si aceptas transferencia, pon tu cuenta o sube tu QR.");
         if (b) M.Negocios.update(b.id, data);
         else { const nb = M.Negocios.create(data); bizActual = nb.id; }
-        cerrarModal(); refrescarOfertas(); mostrar("negocio"); toast("✅ Negocio guardado");
+        cerrarModal(); refrescarOfertas();
+        if (bizReturnTo === "tienda") { bizReturnTo = null; mostrar("tienda"); }
+        else mostrar("negocio");
+        toast("✅ Negocio guardado");
       } catch (e) { $("bzErr").innerHTML = `<div class="error">${M.esc(e.message)}</div>`; }
     });
   }
   function openBizItem(nid, iid) {
     const M = st();
+    if (S().user && (S().user.rol === "admin" || S().user.rol === "tienda")) M.Negocios.ensureLocal(nid);
     const b = M.Negocios.get(nid);
     if (!b) return;
-    if (!S().user || b.createdBy !== S().user.username) { toast("Solo el dueño puede editar este inventario"); return; }
+    if (!canManageBiz(b)) { toast("Solo el dueño puede editar este inventario"); return; }
     const it = iid ? (b.items || []).find((x) => x.id === iid) : null;
     const opts = cats.map((c) => `<option${it && it.categoria === c ? " selected" : ""}>${M.esc(c)}</option>`).join("");
     abrirModal(`<h3>📦 ${it ? "Editar producto" : "Agregar producto"} — ${M.esc(b.nombre)}</h3>` +
@@ -1314,9 +1667,15 @@
       `<div><label>Moneda</label><div class="radiofila"><label><input type="radio" name="bi_mon" value="CUP" ${(it ? it.moneda : "CUP") === "CUP" ? "checked" : ""}> CUP</label><label><input type="radio" name="bi_mon" value="USD" ${(it && it.moneda === "USD") ? "checked" : ""}> USD</label></div></div>` +
       `<div style="flex:1"><label>Cantidad</label><input type="number" id="bi_stock" min="0" value="${it ? it.stock : 10}"></div></div>` +
       `<label>Descripción</label><textarea id="bi_desc" maxlength="500">${M.esc(it ? it.descripcion : "")}</textarea>` +
-      `<label>Foto</label><input type="file" id="bi_img" accept="image/*">` +
+      `<label>Foto del producto</label>` +
+      `<button type="button" class="upcard" id="bi_img_btn"><span class="up-ico">📷</span><span class="up-txt"><b>Toca para elegir la foto</b><small>Galería o cámara</small></span><span class="up-file" id="bi_img_nom">Sin foto</span></button>` +
+      `<input type="file" id="bi_img" class="upfile" accept="image/*" tabindex="-1"><div class="upprev" id="bi_img_prev"></div>` +
       `<div class="nota">Hereda los pagos y domicilio del negocio: ${M.esc([b.pagos.transfer && "transferencia", b.pagos.efectivoCUP && "CUP", b.pagos.efectivoUSD && "USD"].filter(Boolean).join(", "))}.</div>` +
       `<button class="btn bloque" id="biGo">Guardar</button><div id="biErr"></div>`);
+    $("bi_img_btn").addEventListener("click", () => $("bi_img").click());
+    if (it && it.mini) { try { $("bi_img").dataset.actual = it.mini; } catch (_) {} }
+    vistaPreviaUp("bi_img", "bi_img_nom", "bi_img_prev", "Sin foto");
+    $("bi_img").addEventListener("change", () => vistaPreviaUp("bi_img", "bi_img_nom", "bi_img_prev", "Sin foto"));
     $("biGo").addEventListener("click", async () => {
       try {
         const tit = $("bi_tit").value.trim();
@@ -1329,8 +1688,144 @@
         const data = { titulo: tit, categoria: $("bi_cat").value, precio: pre, moneda: document.querySelector('input[name=bi_mon]:checked').value, stock: Math.max(0, Number($("bi_stock").value) || 0), descripcion: $("bi_desc").value.trim(), mini, imagenes, municipio: b.municipio };
         if (iid) M.Negocios.updateItem(nid, iid, data);
         else M.Negocios.addItem(nid, data);
-        cerrarModal(); refrescarOfertas(); pintarNegocio(); toast("✅ Inventario actualizado");
+        cerrarModal(); refrescarOfertas();
+        if ($("v-tienda").className.includes("act") && tiendaActual === nid) cargarTienda();
+        else { bizActual = nid; pintarNegocio(); }
+        toast("✅ Inventario actualizado");
       } catch (e) { $("biErr").innerHTML = `<div class="error">${M.esc(e.message)}</div>`; }
+    });
+  }
+
+  /* ================= TIENDA: panel del administrador del negocio ================= */
+  // Aquí la tienda ve qué vendieron los colaboradores por otras redes
+  // (WhatsApp/Facebook/Instagram), cuánto debe pagarles, y gestiona todo:
+  // inventario, perfil, pagos/QR, domicilio y programa de afiliados.
+  function cargarTienda() {
+    const M = st();
+    const box = $("tiendaPanel");
+    const u = S().user;
+    if (u && u.rol === "tienda") { const tid = tiendaId(); if (tid) tiendaActual = tid; else if (u.negocioId) tiendaActual = u.negocioId; }
+    const b = tiendaActual && M.Negocios.get(tiendaActual);
+    if (!b) { box.innerHTML = `<div class="vacio">Tienda no encontrada.</div>`; return; }
+    const ok = u && (u.rol === "admin" || (b.createdBy && b.createdBy === u.username) || (u.rol === "tienda" && (u.negocioId === b.id || tiendaId() === b.id)));
+    if (!ok) { box.innerHTML = `<div class="error">Solo el administrador de esta tienda.</div>`; return; }
+    // ⛔ Suspendida por impago: cartel que no deja hacer nada (solo el admin global ve el panel)
+    if (M.Negocios.suspendida(b) && u.rol !== "admin") {
+      box.innerHTML = `<div class="metodo" style="text-align:center;padding:32px 20px;max-width:560px;margin:20px auto">` +
+        `<div style="font-size:3rem">⛔</div><h2 style="margin:8px 0">Tienda suspendida</h2>` +
+        `<p><b>${M.esc(M.Negocios.motivoSusp(b))}</b></p>` +
+        `<div class="alerta">Tus productos están ocultos en la página, como si la tienda no existiera. Para seguir utilizando los servicios debes ponerte al día con la mensualidad.</div>` +
+        `<div class="nota">Cuota mensual: <b>${M.fmtCUP(M.Negocios.CUOTA_MENSUAL)} CUP</b> · Contacta al administrador general para pagar y reactivar tu tienda.</div>` +
+        `<button class="btn gris" id="tSalir">Salir</button></div>`;
+      $("tSalir").addEventListener("click", () => { S().token = null; S.user = null; M.guardarSesion(); pintarUser(); mostrar("inicio"); });
+      return;
+    }
+    const suspWarn = (M.Negocios.suspendida(b) && u.rol === "admin")
+      ? `<div class="alerta">⛔ Suspendida: ${M.esc(M.Negocios.motivoSusp(b))}. Cobra la cuota en 🏪 Negocios.</div>` : "";
+    const items = b.items || [];
+    const af = M.Afiliados.affilStats(b);
+    const paid = M.Afiliados.paidFor(b.id);
+    const ventas = M.Afiliados.salesForBiz(b.id).slice().reverse();
+    const totVentas = ventas.reduce((a, x) => a + (Number(x.cup) || 0), 0);
+    const totOwed = af.reduce((a, x) => a + x.owed, 0);
+    const totPaid = Object.values(paid).reduce((a, x) => a + (Number(x) || 0), 0);
+    const totClicks = af.reduce((a, x) => a + x.clicks, 0);
+    const pctCfg = (b.afiliados && b.afiliados.pct) || 5;
+    const activoCfg = !(b.afiliados && b.afiliados.activo === false);
+    const canAccess = u.rol === "admin" || (b.createdBy && b.createdBy === u.username);
+    const fmtF = (ts) => { try { return new Date(ts).toISOString().slice(0, 10); } catch (e) { return ""; } };
+
+    let h = `<button class="mini-btn" id="tBack">← ${u.rol === "admin" ? "Panel admin" : "Tiendas"}</button>` + suspWarn +
+      `<div class="biz-perfil-head" style="margin-top:10px">` +
+      `<img class="logo" src="${M.esc(b.logo || "src/assets/banner1.jpg")}" alt="" onerror="this.onerror=null;this.src='src/assets/banner1.jpg'">` +
+      `<div style="flex:1;min-width:200px"><h2 style="margin:0">🏪 ${M.esc(b.nombre)}</h2>` +
+      `<div class="nota">Panel de la tienda · logueado como <b>${M.esc(u.username)}</b></div>` + bizPayBadges(b) + `</div>` +
+      `<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="mini-btn" id="tVer">👁 Pública</button> <button class="mini-btn" id="tEdit">✎ Perfil</button></div></div>`;
+
+    h += `<div class="stat-row" style="font-size:1rem;margin:12px 0"><span>👁 ${totClicks} clics</span><span>🛒 ${ventas.length} ventas</span>` +
+      `<span>💰 ${M.fmtCUP(Math.round(totVentas))} CUP</span><span>🤝 A pagar: <b>${M.fmtCUP(Math.round(totOwed - totPaid))} CUP</b></span></div>`;
+
+    // Comisiones por colaborador
+    h += `<h3>🤝 Lo que vendieron tus colaboradores (otras redes)</h3>`;
+    if (!af.length) h += `<div class="vacio">Aún nadie vende por ti. Comparte tu tienda para atraer colaboradores.</div>`;
+    else h += `<table><tr><th>Colaborador</th><th>Clics</th><th>Ventas</th><th>Vendido</th><th>Comisión</th><th>Pagado</th><th>A pagar</th><th></th></tr>` +
+      af.map((a) => {
+        const pg = Number(paid[a.by]) || 0;
+        const debe = Math.max(0, Math.round(a.owed - pg));
+        return `<tr><td><b>@${M.esc(a.by)}</b></td><td>${a.clicks}</td><td>${a.sales.length}</td>` +
+          `<td>${M.fmtCUP(Math.round(a.cup))}</td><td>${M.fmtCUP(Math.round(a.owed))} CUP</td><td>${M.fmtCUP(pg)}</td>` +
+          `<td><b>${M.fmtCUP(debe)}</b></td>` +
+          `<td>${debe > 0 ? `<button class="mini-btn ok" data-paid="${M.esc(a.by)}" data-amt="${Math.round(a.owed)}">✓ Pagado</button>` : `<span class="ok">✅</span>`}</td></tr>`;
+      }).join("") + `</table>`;
+
+    // Detalle de ventas
+    if (ventas.length) {
+      h += `<h3>🧾 Detalle de ventas</h3><table><tr><th>Fecha</th><th>Producto</th><th>Colaborador</th><th>Comprador</th><th>Total</th><th>Comisión</th></tr>` +
+        ventas.slice(0, 50).map((x) => `<tr><td>${fmtF(x.ts)}</td><td>${M.esc(x.titulo || x.pid)}</td><td>@${M.esc(x.by)}</td>` +
+          `<td>${M.esc(x.buyer || "—")}</td><td>${M.fmtCUP(x.cup)}</td><td>${M.fmtCUP(Math.round(x.cup * (x.pct != null ? x.pct : pctCfg) / 100))} (${x.pct != null ? x.pct : pctCfg}%)</td></tr>`).join("") + `</table>`;
+    }
+
+    // Inventario
+    h += `<div style="display:flex;align-items:center;gap:8px;margin:14px 0 8px"><h3 style="margin:0">📦 Inventario (${items.length})</h3><span style="flex:1"></span>` +
+      `<button class="btn" id="tAddItem" style="margin:0">＋ Agregar</button></div>`;
+    h += items.length ? `<table><tr><th>Producto</th><th>Precio</th><th>Stock</th><th></th></tr>` +
+      items.map((it) => `<tr><td><b>${M.esc(it.titulo)}</b><br><span class="nota">${M.esc(it.categoria || "")}</span></td>` +
+        `<td>${M.precios(Object.assign({ pagos: b.pagos }, it)).main}</td><td>${it.stock != null ? it.stock : "—"}</td>` +
+        `<td style="white-space:nowrap"><button class="mini-btn" data-teitem="${M.esc(it.id)}">✎</button> <button class="mini-btn no" data-tditem="${M.esc(it.id)}">🗑</button></td></tr>`).join("") + `</table>`
+      : `<div class="vacio">Sin productos. Agrega el primero.</div>`;
+
+    // Programa de afiliados
+    h += `<div class="metodo"><h4>🤝 Programa de afiliados</h4><div class="nota">Tus colaboradores promocionan con su enlace + imagen promo. Si venden en 30 días, les pagas el %.</div>` +
+      `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end"><div><label style="font-weight:400"><input type="checkbox" id="tAfAct" ${activoCfg ? "checked" : ""}> Programa activo</label></div>` +
+      `<div><label>Comisión % por venta</label><input type="number" id="tAfPct" min="1" max="50" value="${pctCfg}" style="max-width:100px"></div>` +
+      `<button class="mini-btn ok" id="tAfSave">Guardar</button></div></div>`;
+
+    // Acceso del admin de la tienda
+    if (canAccess) {
+      h += `<div class="metodo"><h4>🔑 Acceso admin de la tienda</h4><div class="nota">Usuario actual: <b>${M.esc(b.adminUser || "(sin definir)")}</b>. Con ese usuario+clave se entra directo a este panel.</div>` +
+        `<div style="display:flex;gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:140px"><label>Usuario admin</label><input type="text" id="tAdmUser" value="${M.esc(b.adminUser || "")}" placeholder="ej: tienda-lapalma"></div>` +
+        `<div style="flex:1;min-width:140px"><label>Clave nueva (vacío = no cambiar)</label><input type="password" id="tAdmPass" autocomplete="new-password"></div></div>` +
+        `<button class="mini-btn ok" id="tAdmSave" style="margin-top:8px">Guardar acceso</button></div>`;
+    } else if (u.rol === "tienda") {
+      h += `<div class="metodo"><h4>🔑 Mi clave</h4><label>Clave nueva</label><input type="password" id="tMyPass" autocomplete="new-password">` +
+        `<button class="mini-btn ok" id="tMyPassGo" style="margin-top:8px">Cambiar mi clave</button></div>`;
+    }
+
+    box.innerHTML = h;
+    $("tBack").addEventListener("click", () => mostrar(u.rol === "admin" ? "admin" : "negocios"));
+    $("tVer").addEventListener("click", () => openNegocio(b.id));
+    $("tEdit").addEventListener("click", () => { bizReturnTo = "tienda"; openBizCreate(b.id); });
+    box.querySelectorAll("[data-paid]").forEach((x) => x.addEventListener("click", () => {
+      if (!confirm(`¿Marcar pagados ${M.fmtCUP(x.dataset.amt)} CUP a @${x.dataset.paid}?`)) return;
+      M.Afiliados.markPaid(b.id, x.dataset.paid, Number(x.dataset.amt));
+      cargarTienda(); toast("✅ Pago registrado");
+    }));
+    $("tAddItem").addEventListener("click", () => openBizItem(b.id, null));
+    box.querySelectorAll("[data-teitem]").forEach((x) => x.addEventListener("click", () => openBizItem(b.id, x.dataset.teitem)));
+    box.querySelectorAll("[data-tditem]").forEach((x) => x.addEventListener("click", () => {
+      if (!confirm("¿Eliminar este producto?")) return;
+      M.Negocios.removeItem(b.id, x.dataset.tditem);
+      refrescarOfertas(); cargarTienda(); toast("Producto eliminado");
+    }));
+    $("tAfSave").addEventListener("click", () => {
+      const pct = Math.min(50, Math.max(1, Number($("tAfPct").value) || 5));
+      M.Negocios.update(b.id, { afiliados: { activo: $("tAfAct").checked, pct } });
+      refrescarOfertas(); cargarTienda(); toast("✅ Programa actualizado");
+    });
+    const admSave = $("tAdmSave");
+    if (admSave) admSave.addEventListener("click", async () => {
+      const nu = $("tAdmUser").value.trim().toLowerCase();
+      if (!nu) { toast("Escribe el usuario admin"); return; }
+      if (nu === "admin") { toast("Ese nombre está reservado"); return; }
+      if (!$("tAdmPass").value && !b.adminHash) { toast("Ponle una clave la primera vez"); return; }
+      await M.Negocios.setAdmin(b.id, nu, $("tAdmPass").value || null);
+      cargarTienda(); toast("✅ Acceso actualizado (entra con ese usuario+clave)");
+    });
+    const myPass = $("tMyPassGo");
+    if (myPass) myPass.addEventListener("click", async () => {
+      if (!$("tMyPass").value) { toast("Escribe la clave nueva"); return; }
+      await M.Negocios.setAdmin(b.id, b.adminUser, $("tMyPass").value);
+      cargarTienda(); toast("✅ Clave cambiada");
     });
   }
 
@@ -1457,7 +1952,7 @@
     try { const r = await M.api("tasa_auto", {}); if (r.auto) await cargarTasa(); } catch (e) {}
   }
 
-  window.MC_APP = { init, goHome, mostrar, viewProduct, openPublish, openAuth, toggleCart, addToCart, products, openCheckout, adminTab, carrMover, openNegocio, openBizCreate, openBizItem, shareProduct, openPromo, checkRef, cargarAfiliado, buscar: (t) => { const i = $("q"); if (i) i.value = t; mostrar("inicio"); aplicarBusqueda(t); } };
+  window.MC_APP = { init, goHome, mostrar, viewProduct, openPublish, openAuth, toggleCart, addToCart, products, openCheckout, adminTab, carrMover, openNegocio, openBizCreate, openBizItem, shareProduct, openPromo, checkRef, cargarAfiliado, openTienda, buscar: (t) => { const i = $("q"); if (i) i.value = t; mostrar("inicio"); aplicarBusqueda(t); } };
   document.addEventListener("DOMContentLoaded", init);
   if (document.readyState !== "loading") init();
 })();
