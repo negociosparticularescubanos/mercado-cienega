@@ -1,0 +1,27 @@
+// Mercado Ciénega — configuración de alto nivel (headless storefront)
+// El frontend vive en index.html + src/*.js. Aquí solo: metadatos, plugins IA y config.
+
+$meta
+  title = Mercado Ciénega · Compra y vende en tu zona
+  shortTitle = Mercado Ciénega
+  description = Marketplace de la Ciénaga de Zapata: compra y vende alimentos, ropa, electrónica, hogar y más. Pagos por Transfermóvil, USDT y efectivo. Asistente IA con búsqueda semántica.
+  image = src/assets/banner1.jpg
+  tags = mercado, cuba, cienaga, tienda, marketplace, ecommerce, ia
+
+// Plugin IA para el asistente (búsqueda semántica + recomendaciones + soporte).
+// Se usa con prefix-cache y streaming; si falla, el asistente usa motor local.
+generateText = {import:ai-text-plugin}
+
+// Proxy sin CORS para leer la tasa de El Toque en vivo desde el navegador
+superFetch = {import:super-fetch-plugin}
+
+apiBase
+  // Backend headless actual (Google Apps Script). Cambia aquí para migrar a tu API propia.
+  url = https://script.google.com/macros/s/AKfycbyl8FulpW1IauqXcEb1aZHNONQiqiRSe7u6Oh5l-Qs9gfhbzlThTTni8H7koE8bciFakA/exec
+  leadsUrl = https://script.google.com/macros/s/AKfycbwkAfve3VYodZD-ogCvBKRvWwTm5umCtYnW1RjnSDWEzCHVwVFQ_Jufl9fhdqjS3RbB/exec
+
+tienda
+  nombre = Mercado Ciénega
+  zona = Ciénaga de Zapata, Matanzas
+  monedaBase = CUP
+  tasaDefecto = 770

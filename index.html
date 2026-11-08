@@ -1,0 +1,178 @@
+<!-- Mercado Ciénega — storefront headless moderno (HTML5 semántico, Tailwind + glassmorphism) -->
+<!-- CSP: endurecer en producción con backend propio (nonces + HttpOnly Secure cookies). En estático se permite CDN + Google Apps Script. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' https:; script-src 'self' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' https: data: blob:; connect-src 'self' https:; font-src 'self' https: data:;">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>
+<link rel="stylesheet" href="src/styles.css">
+<link rel="preload" as="image" href="src/assets/banner1.jpg" fetchpriority="high">
+
+<a href="#grid" class="sr-only">Saltar a productos</a>
+
+<header class="mc-header">
+  <div class="mc-header-inner">
+    <div class="logo" onclick="window.MC_APP.goHome()" role="button" tabindex="0" aria-label="Ir al inicio">🛒 Mercado <span>Ciénega</span></div>
+    <div class="buscador" role="search">
+      <input id="q" type="text" placeholder="Buscar: celular, mango, regalo para mamá…" autocomplete="off" aria-label="Buscar productos">
+      <button id="searchBtn" aria-label="Buscar">🔍</button>
+    </div>
+    <div class="tasa" id="tasaBadge" title="Tasa de referencia">USD: …</div>
+    <div class="mc-tip" id="tasaTip">Tasa de referencia CUP por USD (fuente configurable). Los precios se convierten automáticamente.</div>
+    <span id="connBadge" class="conn-badge" title="Estado con Google Sheets"><span id="connDot" class="conn-dot conn-red"></span><span id="connText">Sin conexión</span></span>
+    <button class="hbtn" onclick="window.MC_APP.openPublish()">＋ Vender</button>
+    <button class="hbtn" onclick="window.MC_APP.mostrar('negocios')">🏪 Negocios</button>
+    <button class="hbtn" onclick="window.MC_APP.toggleCart()" aria-label="Abrir carrito">🛒<span class="n" id="cartN" style="display:none">0</span></button>
+    <button class="hbtn" id="btnUser" onclick="window.MC_APP.openAuth()">👤 Entrar</button>
+  </div>
+</header>
+<nav class="cats" id="catNav" aria-label="Categorías"></nav>
+
+<main>
+  <div id="v-inicio" class="vista act">
+    <section class="carrusel" id="carrusel" aria-label="Destacados">
+      <div class="slides">
+        <div class="slide act">
+          <img src="src/assets/banner1.jpg" alt="Compra y vende en tu zona" fetchpriority="high" decoding="async">
+          <div class="leyenda"><h3>🛒 Compra y vende en tu zona</h3><p>Miles de productos cerca de ti, en CUP o USD</p></div>
+        </div>
+        <div class="slide">
+          <img src="src/assets/banner2.jpg" alt="Compra desde tu teléfono" loading="lazy" decoding="async">
+          <div class="leyenda"><h3>📱 Compra desde tu teléfono</h3><p>Coordina por WhatsApp con el vendedor</p></div>
+        </div>
+        <div class="slide">
+          <img src="src/assets/banner3.jpg" alt="Vende tus productos" loading="lazy" decoding="async">
+          <div class="leyenda"><h3>📢 Vende tus productos</h3><p>Anuncia y llega a toda la Ciénaga</p></div>
+        </div>
+      </div>
+      <button class="flecha izq" data-d="-1" aria-label="Anterior">‹</button>
+      <button class="flecha der" data-d="1" aria-label="Siguiente">›</button>
+      <div class="puntos" id="carrPuntos"></div>
+    </section>
+
+    <div id="catStrip" class="cat-strip" aria-label="Explorar por categoría"></div>
+
+    <div class="flex flex-wrap items-center gap-2 mt-2">
+      <span id="resCount" class="text-sm" style="color:var(--gris)"></span>
+      <span style="flex:1"></span>
+      <label class="text-sm" for="sortSel">Orden:</label>
+      <select id="sortSel" style="width:auto;display:inline-block">
+        <option value="ventas">🔥 Más vendidos</option>
+        <option value="oferta">💰 Mejor oferta</option>
+        <option value="vistos">👁 Más vistos</option>
+        <option value="compartidos">↗ Más compartidos</option>
+        <option value="rel">Relevancia</option>
+        <option value="precio-asc">Precio: menor a mayor</option>
+        <option value="precio-desc">Precio: mayor a menor</option>
+      </select>
+      <label class="text-sm" for="priceSel">Precio máx:</label>
+      <select id="priceSel" style="width:auto;display:inline-block">
+        <option value="0">Todos</option>
+        <option value="500">500 CUP</option>
+        <option value="2000">2,000 CUP</option>
+        <option value="5000">5,000 CUP</option>
+        <option value="20000">20,000 CUP</option>
+      </select>
+    </div>
+
+    <div id="secDest"></div>
+    <h2 class="sec">🛍️ Productos</h2>
+    <div class="grid" id="grid"></div>
+    <div class="vacio" id="vacio" style="display:none">No hay productos con ese filtro.<br>Sé el primero en <a href="#" onclick="window.MC_APP.openPublish();return false;">publicar uno</a>.</div>
+
+    <section class="newsletter" id="newsWrap" aria-label="Ofertas por correo">
+      <div style="font-size:2rem">📧</div>
+      <div style="flex:1;min-width:220px">
+        <b>Recibe ofertas y recupera tu carrito</b><br>
+        <span style="opacity:.85;font-size:.9rem">1 correo/semana. Sin spam. Estructura lista para Klaviyo.</span>
+      </div>
+      <form id="newsForm" style="display:flex;gap:8px;flex:1;min-width:240px" onsubmit="return false">
+        <input id="newsEmail" type="email" placeholder="tu@correo.com" aria-label="Tu correo">
+        <button class="btn" style="margin:0" type="submit">Unirme</button>
+      </form>
+    </section>
+  </div>
+
+  <div id="v-mios" class="vista">
+    <h2 class="sec">📢 Mis anuncios</h2>
+    <div id="misLista"></div>
+  </div>
+  <div id="v-pedidos" class="vista">
+    <h2 class="sec">🧾 Mis pedidos</h2>
+    <div id="pedLista"></div>
+  </div>
+  <div id="v-negocios" class="vista">
+    <div class="flex flex-wrap items-center gap-2">
+      <h2 class="sec" style="margin:0">🏪 Negocios de la zona</h2>
+      <span style="flex:1"></span>
+      <button class="btn" style="margin-top:0" onclick="window.MC_APP.openBizCreate()">＋ Crear mi negocio</button>
+    </div>
+    <p class="nota">Cada negocio tiene su perfil con inventario, precios, formas de pago y QR de transferencia. En la búsqueda verás todas las ofertas del mismo producto ordenadas: precio más bajo primero, luego los que aceptan transferencia y al final solo-efectivo.</p>
+    <div id="negList" class="biz-grid" style="margin-top:12px"></div>
+  </div>
+  <div id="v-negocio" class="vista">
+    <div id="negPerfil"></div>
+  </div>
+  <div id="v-afiliado" class="vista">
+    <h2 class="sec">🤝 Mis promociones</h2>
+    <div class="nota">Gana comisión promocionando productos <b>sin duplicar anuncios</b>: tu enlace lleva directo a la tienda y cada venta en 30 días cuenta para ti.</div>
+    <div id="afLista"></div>
+  </div>
+  <div id="v-admin" class="vista">
+    <h2 class="sec">⚙️ Administración</h2>
+    <div class="tabs" id="adminTabs">
+      <button class="act" onclick="window.MC_APP.adminTab('pagos',this)">💰 Pagos pendientes</button>
+      <button onclick="window.MC_APP.adminTab('prods',this)">📦 Productos</button>
+      <button onclick="window.MC_APP.adminTab('cats',this)">🏷️ Categorías</button>
+      <button onclick="window.MC_APP.adminTab('tasa',this)">💱 Tasa USD</button>
+      <button onclick="window.MC_APP.adminTab('ajustes',this)">🔧 Ajustes</button>
+    </div>
+    <div id="adm-pagos"></div>
+    <div id="adm-prods" style="display:none"></div>
+    <div id="adm-cats" style="display:none"></div>
+    <div id="adm-tasa" style="display:none"></div>
+    <div id="adm-ajustes" style="display:none"></div>
+  </div>
+</main>
+
+<div class="fondo-modal" id="fondoModal" style="display:none" onclick="if(event.target===this)document.getElementById('fondoModal').style.display='none'">
+  <div class="modal" id="modalBox">
+    <button class="cerrar" onclick="document.getElementById('fondoModal').style.display='none'" aria-label="Cerrar">×</button>
+    <div id="modalCont"></div>
+  </div>
+</div>
+
+<aside class="drawer" id="drawer" aria-label="Carrito">
+  <header><div class="mc-header-inner"><b style="font-size:1.15rem">🛒 Mi carrito</b>
+    <button class="hbtn" style="margin-left:auto" onclick="window.MC_APP.toggleCart(false)">✕</button></div></header>
+  <div class="items" id="cartItems"></div>
+  <div class="pie" id="cartPie"></div>
+</aside>
+
+<footer>
+  <b>Mercado Ciénega</b> · compra y vende en tu zona<br>
+  <span id="footTasa"></span><br>
+  <span style="opacity:.7">Pagos: Transfermóvil · USDT · Efectivo · Tarjeta/PayPal (simulado) · Envíos por zona · Asistente IA 🦎</span>
+</footer>
+
+<!-- Asistente virtual con IA -->
+<button id="cfBurbuja" aria-label="Abrir el asistente del Mercado" onclick="window.CF.open()">🦎<span class="ping"></span></button>
+<div id="cfPanel" role="dialog" aria-label="Asistente del Mercado Ciénega">
+  <div class="cf-cab">
+    <span class="cf-av">🦎</span>
+    <div><b>Cienaguero · Asistente IA</b><small>Entiendo intenciones, no solo palabras</small></div>
+    <button onclick="window.CF.close()" aria-label="Cerrar">✕</button>
+  </div>
+  <div id="cfMsgs"></div>
+  <div id="cfChips"></div>
+  <form class="cf-entrada" onsubmit="window.CF.send(event)">
+    <input id="cfTexto" type="text" placeholder="Ej: regalo para mi mamá por menos de $50…" autocomplete="off">
+    <input id="cfHp" type="text" style="display:none" tabindex="-1" autocomplete="off">
+    <button type="submit" aria-label="Enviar">➤</button>
+  </form>
+</div>
+
+<noscript><div class="alerta">Activa JavaScript para usar el Mercado Ciénega.</div></noscript>
+<script src="src/data.js" defer></script>
+<script src="src/api.js" defer></script>
+<script src="src/app.js" defer></script>
+<script src="src/assistant.js" defer></script>
