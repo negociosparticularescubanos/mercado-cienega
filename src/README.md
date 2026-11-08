@@ -16,6 +16,11 @@ Marketplace de la Ciénaga de Zapata. Arquitectura headless: `index.html + src/*
 - `API_URL` productos/auth/pedidos/pagos/tasa/config + `LEADS_API` leads. Todo POST JSON `{action, token, ...}`.
 - Para migrar a backend propio: cambia URLs en `main.pjs` y adapta `src/api.js` (contratos ya definidos).
 
+## Tasa USD (en vivo en cada entrada)
+- Se consulta El Toque en vivo cada vez que se abre la página (tabla "Mercado Informal de Divisas" vía superFetch); la caché local solo pinta al instante y sirve de respaldo sin conexión. Al llegar el valor vivo se actualizan insignia, pie y precios.
+- Buscador: texto oscuro sobre fondo claro + sugerencias en vivo (top 6 con foto/precio, clic abre el producto, Esc/clic-fuera cierra).
+- View Transitions desactivadas cuando el documento está oculto (evita "Transition was aborted").
+
 ## Afiliados / colaboradores (nuevo)
 - Modelo Amazon Afiliados/Temu: enlace `#p-ID-r-usuario`, atribución **30 días**, comisión % por negocio (gral 5%).
 - Colaborador: botón 🤝 en el producto → kit (enlace + imagen promo 720×900 con QR + botón WhatsApp + descarga). El botón WhatsApp comparte **la imagen + texto + enlace juntos** (Web Share con archivos en el celular; en PC la descarga y abre wa.me con el texto listo para adjuntarla). Vista "🤝 Mis promociones" (menú usuario): clics/ventas/ganado por enlace.

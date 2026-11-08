@@ -36,11 +36,22 @@ body{
 .mc-header-inner{max-width:1240px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .logo{font-size:1.45rem;font-weight:800;cursor:pointer;letter-spacing:.01em}
 .logo span{color:var(--acento)}
-.buscador{flex:1;display:flex;min-width:200px;box-shadow:0 4px 16px rgba(0,0,0,.2);border-radius:12px;overflow:hidden}
-.buscador input{flex:1;padding:11px 14px;border:none;font-size:1rem;background:rgba(255,255,255,.96);min-width:0}
+.buscador{flex:1;display:flex;min-width:200px;position:relative}
+.buscador input{flex:1;padding:11px 14px;border:none;font-size:1rem;background:rgba(255,255,255,.96);color:#111;-webkit-text-fill-color:#111;caret-color:#111;min-width:0;border-radius:12px 0 0 12px;box-shadow:0 4px 16px rgba(0,0,0,.2)}
 .buscador input:focus{outline:2px solid var(--acento)}
-.buscador button{background:var(--acento);border:none;padding:0 18px;font-size:1.2rem;cursor:pointer}
+.buscador input::placeholder{color:#8a938a;opacity:1}
+.buscador button{background:var(--acento);border:none;padding:0 18px;font-size:1.2rem;cursor:pointer;border-radius:0 12px 12px 0;box-shadow:0 4px 16px rgba(0,0,0,.2);color:#111}
 .buscador button:hover{background:var(--acento-osc)}
+.sug-box{position:absolute;top:calc(100% + 6px);left:0;right:0;background:#fff;color:#111;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.3);z-index:100;max-height:320px;overflow:auto;padding:6px}
+.sug-box[hidden]{display:none}
+.sug-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:none;padding:8px;border-radius:10px;cursor:pointer;font:inherit;color:#111}
+.sug-item:hover{background:#f0f5f0}
+.sug-item img{width:44px;height:44px;object-fit:cover;border-radius:8px;flex:none;background:#e8ece8}
+.sug-item .t{flex:1;min-width:0}
+.sug-item .t b{display:block;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sug-item .t span{font-size:.78rem;color:#1e7a4c;font-weight:700}
+.sug-item .go{color:#8a938a;font-size:1rem}
+.sug-empty{padding:10px;text-align:center;color:#8a938a;font-size:.85rem}
 .tasa{font-size:.78rem;background:rgba(255,255,255,.14);padding:6px 10px;border-radius:999px;white-space:nowrap;anchor-name:--tasa}
 .hbtn{
   background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.18);

@@ -112,8 +112,10 @@
   }
   /* ---------- tasa USD en vivo desde El Toque ---------- */
   // La web de El Toque trae la tabla "Mercado Informal de Divisas" embebida.
-  // Prioridad: El Toque en vivo > caché 12h (2 veces al día) > backend > valor por defecto.
+  // Se consulta EN VIVO en cada entrada a la página; la caché solo sirve para
+  // pintar algo al instante y como respaldo si no hay conexión.
   const TASA_CACHE_KEY = "mc_tasa_eltoque";
+  let liveMemo = null; // evita doble scrape en la misma carga (init + tasa_auto)
   function parseTasaElToque(html) {
     try {
       const start = html.indexOf("Mercado Informal de Divisas");
@@ -125,11 +127,15 @@
       return v > 0 ? v : null;
     } catch (e) { return null; }
   }
-  async function tasaElToqueVivo() {
+  function cachedTasa() {
     try {
       const c = JSON.parse(localStorage.getItem(TASA_CACHE_KEY) || "null");
-      if (c && Date.now() - c.ts < 12 * 60 * 60 * 1000 && c.tasa > 0) return { tasa: c.tasa, cached: true };
+      if (c && Number(c.tasa) > 0) return c;
     } catch (e) {}
+    return null;
+  }
+  async function tasaElToqueVivo() {
+    if (liveMemo && Date.now() - liveMemo.ts < 5 * 60 * 1000) return liveMemo;
     try {
       const html = await Promise.race([
         (async () => {
@@ -144,22 +150,31 @@
       ]);
       const v = parseTasaElToque(html);
       if (!v) return null;
-      try { localStorage.setItem(TASA_CACHE_KEY, JSON.stringify({ tasa: v, ts: Date.now() })); } catch (e) {}
-      return { tasa: v, cached: false };
+      const hoy = new Date().toISOString().slice(0, 10);
+      try { localStorage.setItem(TASA_CACHE_KEY, JSON.stringify({ tasa: v, ts: Date.now(), fecha: hoy })); } catch (e) {}
+      liveMemo = { tasa: v, cached: false, fecha: hoy, ts: Date.now() };
+      return liveMemo;
     } catch (e) { return null; }
   }
   async function cargarTasa() {
-    try {
-      const r = await api("tasa_get", {});
-      if (r.ok) S.tasa = { tasa: Number(r.tasa) || S.tasa.tasa, fecha: r.fecha, fuente: r.fuente };
-    } catch (e) {}
+    // 1) caché al instante si existe (no bloquea la entrada)
+    const c = cachedTasa();
+    if (c) S.tasa = { tasa: Number(c.tasa), fecha: c.fecha || new Date(c.ts).toISOString().slice(0, 10), fuente: "El Toque (caché)" };
+    // 2) en vivo SIEMPRE, en cada entrada a la página
     try {
       const live = await tasaElToqueVivo();
       if (live && live.tasa > 0) {
-        const hoy = new Date().toISOString().slice(0, 10);
-        S.tasa = { tasa: live.tasa, fecha: hoy, fuente: live.cached ? "El Toque (caché)" : "El Toque · hoy (auto)" };
+        S.tasa = { tasa: live.tasa, fecha: live.fecha, fuente: "El Toque · hoy (auto)" };
+        return S.tasa;
       }
     } catch (e) {}
+    // 3) sin vivo ni caché: backend, y si no, el valor por defecto
+    if (!c) {
+      try {
+        const r = await api("tasa_get", {});
+        if (r.ok) S.tasa = { tasa: Number(r.tasa) || S.tasa.tasa, fecha: r.fecha, fuente: r.fuente };
+      } catch (e) {}
+    }
     return S.tasa;
   }
 
@@ -395,7 +410,7 @@
     S, CFG, api, setConn, on: (fn) => listeners.add(fn),
     fmtCUP, fmtUSD, precios, cupOf, waLink, esc,
     cargarSesion, guardarSesion, guardarCarrito,
-    demoList, recargarCats, cargarTasa,
+    demoList, recargarCats, cargarTasa, cachedTasa,
     Shipping, Payments, Marketing, Engagement, Negocios, Afiliados,
   };
 })();

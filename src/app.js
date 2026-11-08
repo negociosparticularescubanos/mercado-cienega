@@ -22,7 +22,7 @@
   let vtBusy = false;
   function withTransition(fn) {
     try {
-      if (document.startViewTransition && !vtBusy) {
+      if (document.startViewTransition && !vtBusy && !document.hidden) {
         vtBusy = true;
         const tr = document.startViewTransition(() => { try { fn(); } catch (e) { console.error(e); } });
         const done = () => { vtBusy = false; };
@@ -213,12 +213,65 @@
   }
   function aplicarBusqueda(v) {
     q = v;
+    const sb = $("sugBox");
+    if (sb) sb.hidden = true;
     const sel = $("sortSel");
     if (q && sortBy === "ventas") { sortBy = "oferta"; if (sel) sel.value = "oferta"; }
     if (!q && sortBy === "oferta") { sortBy = "ventas"; if (sel) sel.value = "ventas"; }
     withTransition(renderGrid);
   }
-  const buscarAhora = debounce(() => aplicarBusqueda($("q").value.trim()), 160);
+  const buscarAhora = debounce(() => { aplicarBusqueda($("q").value.trim()); pintarSugs(); }, 160);
+
+  /* ---------- sugerencias mientras escribes ---------- */
+  function matchesFor(t) {
+    const terms = normK(t).split(/[^a-z0-9]+/).filter((w) => w.length >= 2);
+    if (!terms.length) return [];
+    const out = [];
+    for (const p of prods) {
+      const hay = normK((p.titulo || "") + " " + (p.descripcion || "") + " " + (p.categoria || "") + " " + (p.negocioNombre || ""));
+      let ok = true, score = 0;
+      for (const term of terms) {
+        if (hay.includes(term)) { score += term.length >= 4 ? 3 : 2; continue; }
+        let best = 99;
+        for (const w of hay.split(/[^a-z0-9]+/)) {
+          if (!w || Math.abs(w.length - term.length) > 2) continue;
+          const d = lev(w, term);
+          if (d < best) best = d;
+          if (best <= 1) break;
+        }
+        if (best <= (term.length >= 6 ? 2 : 1)) score += 1;
+        else { ok = false; break; }
+      }
+      if (ok) score += (p.destacado ? 2 : 0);
+      if (ok) out.push({ p, score });
+    }
+    return out.sort((a, b) => b.score - a.score).slice(0, 6).map((x) => x.p);
+  }
+  function pintarSugs() {
+    const box = $("sugBox");
+    if (!box) return;
+    const t = ($("q").value || "").trim();
+    if (t.length < 2) { box.hidden = true; box.innerHTML = ""; return; }
+    const M = st();
+    const list = matchesFor(t);
+    if (!list.length) {
+      box.innerHTML = `<div class="sug-empty">Sin coincidencias — pulsa 🔍 para buscar de todos modos</div>`;
+      box.hidden = false;
+      return;
+    }
+    box.innerHTML = list.map((p) =>
+      `<button class="sug-item" data-sug="${M.esc(p.id)}">` +
+      (p.mini ? `<img loading="lazy" src="${M.esc(p.mini)}" alt="" onerror="this.style.display='none'">` : `<span style="font-size:1.6rem">📦</span>`) +
+      `<span class="t"><b>${M.esc(p.titulo)}</b><span>${M.precios(p).main}</span></span><span class="go">›</span></button>`
+    ).join("");
+    box.hidden = false;
+    box.querySelectorAll("[data-sug]").forEach((b) => b.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      box.hidden = true;
+      viewProduct(b.dataset.sug);
+    }));
+  }
+  function hideSugs() { const box = $("sugBox"); if (box) { box.hidden = true; } }
 
   /* ---------- navegación ---------- */
   function mostrar(v) {
@@ -231,7 +284,7 @@
     if (v === "afiliado") cargarAfiliado();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
-  function goHome() { cat = ""; const i = $("q"); if (i) i.value = ""; sortBy = "ventas"; const s = $("sortSel"); if (s) s.value = "ventas"; q = ""; mostrar("inicio"); pintarCats(); renderGrid(); }
+  function goHome() { cat = ""; const i = $("q"); if (i) i.value = ""; hideSugs(); sortBy = "ventas"; const s = $("sortSel"); if (s) s.value = "ventas"; q = ""; mostrar("inicio"); pintarCats(); renderGrid(); }
 
   async function shareProduct(p) {
     const M = st();
@@ -1334,9 +1387,22 @@
   async function recargar() { const M = st(); try { const r = await M.api("categorias_list", {}); if (r.ok) cats = r.categorias; } catch (e) {} pintarCats(); }
   async function cargarTasa() {
     const M = st();
+    const paint = () => {
+      $("tasaBadge").textContent = `💱 USD: ${M.S.tasa.tasa} CUP`;
+      const f = $("footTasa");
+      if (f) f.textContent = `Tasa: ${M.S.tasa.tasa} CUP/USD · ${M.S.tasa.fuente} (${M.S.tasa.fecha})`;
+    };
+    // caché al instante (si hay) para no mostrar "…" mientras llega el vivo
+    try {
+      const c = M.cachedTasa();
+      if (c && Number(c.tasa) > 0) {
+        M.S.tasa = { tasa: Number(c.tasa), fecha: c.fecha || "", fuente: "El Toque (caché)" };
+        paint();
+      }
+    } catch (e) {}
     await M.cargarTasa();
-    $("tasaBadge").textContent = `💱 USD: ${M.S.tasa.tasa} CUP`;
-    $("footTasa").textContent = `Tasa: ${M.S.tasa.tasa} CUP/USD · ${M.S.tasa.fuente} (${M.S.tasa.fecha})`;
+    paint();
+    try { renderGrid(); } catch (e) {} // reconvierte precios con la tasa fresca
   }
   function newsletterInit() {
     const M = st();
@@ -1361,8 +1427,13 @@
       document.head.appendChild(l);
     } catch (e) {}
     $("q").addEventListener("input", buscarAhora);
-    $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") aplicarBusqueda($("q").value.trim()); });
+    $("q").addEventListener("focus", pintarSugs);
+    $("q").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") aplicarBusqueda($("q").value.trim());
+      else if (e.key === "Escape") hideSugs();
+    });
     $("searchBtn").addEventListener("click", () => aplicarBusqueda($("q").value.trim()));
+    document.addEventListener("click", (e) => { if (!e.target.closest(".buscador")) hideSugs(); });
     $("sortSel").addEventListener("change", (e) => { sortBy = e.target.value; renderGrid(); });
     $("priceSel").addEventListener("change", (e) => { maxPrice = Number(e.target.value) || 0; renderGrid(); });
     // carrusel
