@@ -17,8 +17,8 @@ superFetch = {import:super-fetch-plugin}
 
 apiBase
   // Backend headless actual (Google Apps Script). Cambia aquí para migrar a tu API propia.
-  url = https://script.google.com/macros/s/AKfycbyl8FulpW1IauqXcEb1aZHNONQiqiRSe7u6Oh5l-Qs9gfhbzlThTTni8H7koE8bciFakA/exec
-  leadsUrl = https://script.google.com/macros/s/AKfycbwkAfve3VYodZD-ogCvBKRvWwTm5umCtYnW1RjnSDWEzCHVwVFQ_Jufl9fhdqjS3RbB/exec
+  url = https://script.google.com/macros/s/AKfycbzjU_FkecOBjYsMl8UfBeE8ckaeTxr2WKDqyOnSHPMZ4O6uj7RpDP2uVPz_GgwXWs1Uwg/exec
+  leadsUrl = https://script.google.com/macros/s/AKfycbzjU_FkecOBjYsMl8UfBeE8ckaeTxr2WKDqyOnSHPMZ4O6uj7RpDP2uVPz_GgwXWs1Uwg/exec
 
 tienda
   nombre = Mercado Ciénega
