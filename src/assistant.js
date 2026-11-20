@@ -327,9 +327,9 @@
     try { localStorage.setItem("cf_datos", JSON.stringify({ nombre: state.datos.nombre, telefono: state.datos.telefono })); } catch (e) {}
     const done = () => respond(`¡Listo, ${state.datos.nombre.split(" ")[0]}! ✅ Ya tomé tus datos y te contactan por WhatsApp. ¿Algo más?`, [{ t: "🛒 Buscar productos", v: "ofertas" }, { t: "🏷️ Quiero vender aquí", v: "vender" }, { t: "↩️ Menú", v: "menu" }]);
     const fail = () => { state.mode = "fin"; respond("No pude guardar tus datos ahora. Inténtalo en un ratico.", [{ t: "↩️ Menú", v: "menu" }]); };
-    if (!st.CFG.leadsUrl) { done(); return; }
-    fetch(st.CFG.leadsUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=UTF-8" }, body: JSON.stringify({ a: "lead", nombre: state.datos.nombre, telefono: state.datos.telefono, interes: state.datos.interes || "Contacto", detalle: state.datos.detalle || "", hp: ($("cfHp") || {}).value || "" }) })
-      .then((r) => r.json()).then((r) => (r && r.ok ? done() : fail())).catch(fail);
+    if (!st.sendLead) { done(); return; }
+    st.sendLead({ nombre: state.datos.nombre, telefono: state.datos.telefono, interes: state.datos.interes || "Contacto", detalle: state.datos.detalle || "", hp: ($("cfHp") || {}).value || "" })
+      .then((r) => (r && r.ok ? done() : fail())).catch(fail);
   }
   function faqAnswer(q) {
     const faqs = data().FAQ || [];

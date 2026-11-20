@@ -35,18 +35,81 @@
     emit("conn");
   }
 
-  async function api(action, data) {
-    data = data || {};
-    const body = Object.assign({ action, token: S.token }, data);
+  /* ---------- Supabase (migración punto 6): RPC mc_* ----------
+   * Las tablas mc_* están cerradas; cada acción llama a su
+   * función, que valida sesión y rol y responde igual que el
+   * servidor anterior. */
+  const SUPA_URL = "https://uczlkdzvzbqgzzlhcmro.supabase.co";
+  const SUPA_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjemxrZHp2emJxZ3p6bGhjbXJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxMzU2ODAsImV4cCI6MjExMDcxMTY4MH0.3xwFjVbL-Usa9hohxU0u__alXH8ZsdsJhH5CWllkH1M";
+  async function rpc(fn, args) {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 18000);
     try {
-      const r = await fetch(CFG.url, { method: "POST", body: JSON.stringify(body), signal: ctrl.signal });
+      const r = await fetch(SUPA_URL + "/rest/v1/rpc/" + fn, {
+        method: "POST",
+        headers: { apikey: SUPA_ANON, Authorization: "Bearer " + SUPA_ANON, "Content-Type": "application/json" },
+        body: JSON.stringify(args || {}),
+        signal: ctrl.signal,
+      });
       const j = await r.json();
       setConn(true);
+      if (j && !Array.isArray(j) && j.ok === undefined && (j.message || j.code))
+        return { ok: false, error: j.message || j.code };
       return j;
     } catch (e) { setConn(false); throw e; }
     finally { clearTimeout(to); }
+  }
+  function rpcArgs(action, b) {
+    const T = S.token;
+    switch (action) {
+      case "register": return { p_username: b.username, p_password: b.password, p_nombre: b.nombre, p_telefono: b.telefono };
+      case "login": return { p_username: b.username, p_password: b.password };
+      case "logout": return { p_token: T };
+      case "pass_change": return { p_token: T, p_actual: b.actual, p_nueva: b.nueva };
+      case "categoria_add": return { p_token: T, p_nombre: b.nombre };
+      case "categoria_del": return { p_token: T, p_nombre: b.nombre };
+      case "productos_list": return { p_categoria: b.categoria, p_q: b.q };
+      case "producto_get": return { p_token: T, p_id: b.id };
+      case "producto_create": return {
+        p_token: T, p_titulo: b.titulo, p_descripcion: b.descripcion, p_precio: b.precio,
+        p_moneda: b.moneda, p_categoria: b.categoria, p_municipio: b.municipio,
+        p_telefono: b.telefono, p_mini: (b.mini != null ? b.mini : b.img),
+        p_negocio_id: b.negocioId, p_negocio_nombre: b.negocioNombre,
+        p_stock: (b.stock === "" || b.stock === undefined) ? null : b.stock,
+        p_pago: b.pago, p_metodo: b.metodo, p_referencia: b.referencia };
+      case "mis_productos": return { p_token: T };
+      case "productos_admin": return { p_token: T };
+      case "producto_delete": return { p_token: T, p_id: b.id };
+      case "producto_renovar": return { p_token: T, p_id: b.id, p_metodo: b.metodo, p_referencia: b.referencia };
+      case "producto_aprobar": return { p_token: T, p_id: b.id };
+      case "destacar_solicitar": return { p_token: T, p_producto_id: b.producto_id, p_metodo: b.metodo, p_referencia: b.referencia };
+      case "pagos_list": return { p_token: T };
+      case "pago_aprobar": return { p_token: T, p_id: b.id };
+      case "pago_rechazar": return { p_token: T, p_id: b.id };
+      case "pedido_create": return { p_token: T, p_items: b.items, p_nota: b.nota, p_ref: b.ref, p_ref_pid: b.ref_pid };
+      case "pedidos_mios": return { p_token: T };
+      case "config_get": return { p_token: T };
+      case "config_set": return { p_token: T, p_clave: b.clave, p_valor: b.valor == null ? b.valor : String(b.valor) };
+      case "tasa_set": return { p_token: T, p_tasa: b.tasa };
+      case "tasa_auto": return { p_token: T };
+      case "engagement_track": return { p_id: b.id, p_campo: b.campo, p_n: b.n };
+      case "ref_click": return { p_by: b.by, p_pid: b.pid };
+      default: return { p_token: T };
+    }
+  }
+  async function api(action, data) {
+    data = data || {};
+    const body = Object.assign({ action, token: S.token }, data);
+    return rpc("mc_" + action, rpcArgs(action, body));
+  }
+  async function sendLead(payload) {
+    try {
+      return await rpc("mc_lead", {
+        p_hp: payload.hp || "", p_nombre: payload.nombre || "",
+        p_telefono: payload.telefono || "", p_interes: payload.interes || "",
+        p_detalle: payload.detalle || "",
+      });
+    } catch (e) { return { ok: false }; }
   }
 
   /* ---------- formato ---------- */
@@ -209,12 +272,7 @@
         pend.push({ email, ts: Date.now(), cart: (S.carrito || []).length });
         localStorage.setItem("mc_abandoned", JSON.stringify(pend.slice(-20)));
       } catch (e) {}
-      if (CFG.leadsUrl) {
-        fetch(CFG.leadsUrl, {
-          method: "POST", headers: { "Content-Type": "text/plain;charset=UTF-8" },
-          body: JSON.stringify({ a: "lead", nombre: email.split("@")[0], telefono: "", interes: "Newsletter", detalle: "Email: " + email, hp: "" }),
-        }).catch(() => {});
-      }
+      sendLead({ nombre: email.split("@")[0], telefono: "", interes: "Newsletter", detalle: "Email: " + email, hp: "" }).catch(() => {});
       return { ok: true };
     },
     markAbandoned() {
@@ -396,6 +454,6 @@
     fmtCUP, fmtUSD, precios, cupOf, waLink, esc,
     cargarSesion, guardarSesion, guardarCarrito,
     demoList, recargarCats, cargarTasa,
-    Shipping, Payments, Marketing, Engagement, Negocios, Afiliados,
+    Shipping, Payments, Marketing, Engagement, Negocios, Afiliados, sendLead,
   };
 })();
